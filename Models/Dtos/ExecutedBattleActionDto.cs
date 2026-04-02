@@ -28,10 +28,7 @@ public class ExecutedBattleActionDto
     public int Healed { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool TargetDied { get; set; }
-    /// <summary>Итоговая вероятность попадания (0…1) после дистанции, укрытия и меткости; null если броска не было (стена, промах валидации и т.п.).</summary>
+    /// <summary>Debug-only: итоговая вероятность попадания (0…1) после дистанции, укрытия и меткости; null если броска не было (стена, промах валидации и т.п.). Не использовать для игровой логики на клиенте.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? HitProbability { get; set; }
-    /// <summary>Результат броска по <see cref="HitProbability"/>; null если броска не было.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public bool? HitSucceeded { get; set; }
 }

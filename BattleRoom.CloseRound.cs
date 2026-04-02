@@ -480,7 +480,6 @@ public partial class BattleRoom
 
                                                 executed.HitProbability = hitDbgHex.Probability;
                                                 bool hitHex = _rng.NextDouble() < hitDbgHex.Probability;
-                                                executed.HitSucceeded = hitHex;
                                                 if (!hitHex)
                                                 {
                                                     executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
@@ -641,7 +640,6 @@ public partial class BattleRoom
 
                                     executed.HitProbability = hitDbg.Probability;
                                     bool hit = _rng.NextDouble() < hitDbg.Probability;
-                                    executed.HitSucceeded = hit;
                                     if (!hit)
                                     {
                                         executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
@@ -1001,7 +999,7 @@ FinishAttackAction:
                 Accepted = accepted.TryGetValue(uid, out var ok) && ok,
                 CurrentAp = us.CurrentAp,
                 PenaltyFraction = us.PenaltyFraction,
-                RejectedReason = rejectedReason.TryGetValue(uid, out var rr) ? rr : null,
+                RejectedReason = ok ? null : (rejectedReason.TryGetValue(uid, out var rr) ? rr : null),
                 CurrentHp = us.CurrentHp,
                 UnitStatus = status,
                 Level = us.UnitType == UnitType.Mob ? 1 : null,
@@ -1083,13 +1081,27 @@ FinishAttackAction:
             CloseRound(fromTimer: false);
     }
 
-    /// <summary>Minimal wire JSON for MoveStep; clear failure reason on any successful action.</summary>
+    /// <summary>Trim wire JSON: drop redundant fields per action type; clear failure reason on success.</summary>
     private static void FinalizeExecutedBattleActionForWire(ExecutedBattleActionDto e)
     {
         if (BattleExecutedActionStatuses.IsSucceeded(e.ActionStatus))
             e.FailureReason = null;
 
-        if (!string.Equals(e.ActionType, BattleActionTypes.MoveStep, StringComparison.OrdinalIgnoreCase))
+        var t = e.ActionType ?? "";
+
+        if (string.Equals(t, BattleActionTypes.ChangePosture, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(t, BattleActionTypes.EquipWeapon, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(t, BattleActionTypes.Reload, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(t, BattleActionTypes.UseItem, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(t, BattleActionTypes.Wait, StringComparison.OrdinalIgnoreCase))
+        {
+            e.ToHex = null;
+            e.TargetUnitId = null;
+            e.HitProbability = null;
+            return;
+        }
+
+        if (!string.Equals(t, BattleActionTypes.MoveStep, StringComparison.OrdinalIgnoreCase))
             return;
 
         e.TargetUnitId = null;
@@ -1098,6 +1110,5 @@ FinishAttackAction:
         e.Healed = 0;
         e.TargetDied = false;
         e.HitProbability = null;
-        e.HitSucceeded = null;
     }
 }
