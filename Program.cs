@@ -305,13 +305,15 @@ app.MapPost("/api/auth/login", (BattleUserDatabase users, BattleAuthSession auth
     return Results.Json(new { accessToken = token, tokenType = "Bearer", expiresInSeconds = 604800, username = displayName, activeBattle }, jsonOpt);
 });
 
-// POST /api/battle/join — Authorization: Bearer only. Body: startCol, startRow, solo (no credentials).
+// POST /api/battle/join — Authorization: Bearer only. Body: hex + solo (no credentials).
 app.MapPost("/api/battle/join", (HttpContext http, BattleRoomStore s, BattleAuthSession auth, JoinRequest? body) =>
 {
     if (!BattleAuthHttp.TryGetBearerUserId(http.Request, auth, out long battleUserId))
         return Results.Json(new ErrorResponse { Error = "Unauthorized" }, jsonOpt, statusCode: 401);
 
-    var (startCol, startRow, solo) = body is { } b ? (b.startCol, b.startRow, b.solo) : (0, 0, false);
+    if (body == null || !TryParseWireHex(body.hex, out int startCol, out int startRow))
+        return Results.Json(new { error = "hex required (format A0..Z99)" }, jsonOpt, statusCode: 400);
+    bool solo = body.solo;
     if (!battleUserDb.TryGetUsername(battleUserId, out string username))
         return Results.Json(new ErrorResponse { Error = "User not found" }, jsonOpt, statusCode: 401);
 
@@ -1181,6 +1183,26 @@ app.MapGet("/api/battle/{battleId}/poll", (HttpContext http, string battleId, st
 
 app.Run();
 
+static bool TryParseWireHex(string? hex, out int col, out int row)
+{
+    col = 0;
+    row = 0;
+    if (string.IsNullOrWhiteSpace(hex))
+        return false;
+    string s = hex.Trim().ToUpperInvariant();
+    if (s.Length < 2 || s.Length > 3)
+        return false;
+    char letter = s[0];
+    if (letter < 'A' || letter > 'Z')
+        return false;
+    if (!int.TryParse(s.Substring(1), out row))
+        return false;
+    if (row < 0 || row > 99)
+        return false;
+    col = letter - 'A';
+    return true;
+}
+
 public class LoginRequest
 {
     public string username { get; set; } = "";
@@ -1190,8 +1212,8 @@ public class LoginRequest
 /// <summary>HTTP <c>/api/battle/join</c>: solo battles and legacy 1v1 waiter (second player completes the pair). Full 1v1/3v3/5v5 + ready-check uses <c>/ws/session</c> messages <c>queueJoin</c> / <c>queueLeave</c> / <c>readyCheckConfirm</c>.</summary>
 public class JoinRequest
 {
-    public int startCol { get; set; }
-    public int startRow { get; set; }
+    /// <summary>Hex coordinate in wire format A0..Z99.</summary>
+    public string? hex { get; set; }
     /// <summary>Если true — создать одиночный бой (1 игрок + серверный моб) без ожидания оппонента.</summary>
     public bool solo { get; set; }
     /// <summary>Уровень персонажа (1–9999); 0 — не задан, используется 1.</summary>
