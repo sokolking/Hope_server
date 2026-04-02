@@ -51,7 +51,7 @@ public partial class BattleRoom
         return p;
     }
 
-    /// <summary>Закрыть раунд: пошаговая симуляция (приоритет по порядку SubmitTurn), пересчёт ОД по actualPath, TurnResult.</summary>
+    /// <summary>Закрыть раунд: пошаговая симуляция (приоритет по порядку SubmitTurn), симуляция движения по шагам, TurnResult.</summary>
     /// <param name="fromTimer">true — время вышло; false — все участники сдали ход досрочно.</param>
     public void CloseRound(bool fromTimer = false)
     {
@@ -182,7 +182,7 @@ public partial class BattleRoom
 
                     QueuedBattleActionDto? action = null;
                     int cost = 1;
-                    string currentPosture = postureByUnit.TryGetValue(uid, out var storedPosture) ? storedPosture : PostureWalk;
+                    string currentPosture = postureByUnit.TryGetValue(uid, out var storedPosture) ? storedPosture : BattlePostures.Walk;
 
                     if (unit.UnitType == UnitType.Mob)
                     {
@@ -201,7 +201,7 @@ public partial class BattleRoom
 
                         action = queue[actionCursor[uid]];
                         string queuedActionType = action?.ActionType ?? string.Empty;
-                        if (string.Equals(queuedActionType, ActionMoveStep, StringComparison.OrdinalIgnoreCase))
+                        if (string.Equals(queuedActionType, BattleActionTypes.MoveStep, StringComparison.OrdinalIgnoreCase))
                         {
                             cost = GetMovementStepCost(currentPosture, movementStepsTaken[uid]);
                             var moveTp = action?.TargetPosition;
@@ -216,15 +216,15 @@ public partial class BattleRoom
                                     cost = remainingAp;
                             }
                         }
-                        else if (string.Equals(queuedActionType, ActionChangePosture, StringComparison.OrdinalIgnoreCase))
+                        else if (string.Equals(queuedActionType, BattleActionTypes.ChangePosture, StringComparison.OrdinalIgnoreCase))
                             cost = ChangePostureCost;
-                        else if (string.Equals(queuedActionType, ActionWait, StringComparison.OrdinalIgnoreCase))
+                        else if (string.Equals(queuedActionType, BattleActionTypes.Wait, StringComparison.OrdinalIgnoreCase))
                             cost = Math.Max(1, action?.Cost ?? 1);
-                        else if (string.Equals(queuedActionType, ActionReload, StringComparison.OrdinalIgnoreCase))
+                        else if (string.Equals(queuedActionType, BattleActionTypes.Reload, StringComparison.OrdinalIgnoreCase))
                             cost = Math.Max(1, action?.Cost ?? 1);
-                        else if (string.Equals(queuedActionType, ActionEquipWeapon, StringComparison.OrdinalIgnoreCase))
+                        else if (string.Equals(queuedActionType, BattleActionTypes.EquipWeapon, StringComparison.OrdinalIgnoreCase))
                             cost = Math.Max(1, action?.Cost ?? 2);
-                        else if (string.Equals(queuedActionType, ActionUseItem, StringComparison.OrdinalIgnoreCase))
+                        else if (string.Equals(queuedActionType, BattleActionTypes.UseItem, StringComparison.OrdinalIgnoreCase))
                             cost = Math.Max(1, action?.Cost ?? 1);
                         else
                             cost = Math.Max(1, action?.Cost ?? 1);
@@ -244,18 +244,17 @@ public partial class BattleRoom
                     string actionType = action.ActionType ?? string.Empty;
                     var executed = new ExecutedBattleActionDto
                     {
-                        UnitId = uid,
                         ActionType = actionType,
                         Tick = tick,
-                        Succeeded = false,
-                        FromPosition = new HexPositionDto { Col = currentPos.col, Row = currentPos.row },
-                        ToPosition = new HexPositionDto { Col = currentPos.col, Row = currentPos.row },
+                        ActionStatus = BattleExecutedActionStatuses.Failure,
+                        FromHex = new HexPositionDto { Col = currentPos.col, Row = currentPos.row }.Hex,
+                        ToHex = new HexPositionDto { Col = currentPos.col, Row = currentPos.row }.Hex,
                         TargetUnitId = action.TargetUnitId,
                         BodyPart = NormalizeBodyPartId(action.BodyPart),
                         Posture = currentPosture
                     };
 
-                    if (string.Equals(actionType, ActionMoveStep, StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(actionType, BattleActionTypes.MoveStep, StringComparison.OrdinalIgnoreCase))
                     {
                         if (action.TargetPosition == null)
                         {
@@ -292,10 +291,10 @@ public partial class BattleRoom
                                     : currentPosture;
                                 executed.Posture = replayMovePosture;
                                 lastMovePostureByUnit[uid] = replayMovePosture;
-                                executed.Succeeded = true;
-                                executed.ToPosition = new HexPositionDto { Col = targetCell.Item1, Row = targetCell.Item2 };
+                                executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
+                                executed.ToHex = new HexPositionDto { Col = targetCell.Item1, Row = targetCell.Item2 }.Hex;
 
-                                if (string.Equals(currentPosture, PostureRun, StringComparison.OrdinalIgnoreCase))
+                                if (string.Equals(currentPosture, BattlePostures.Run, StringComparison.OrdinalIgnoreCase))
                                 {
                                     hadRunMovementByUnit[uid] = true;
                                     runMovementApSpent[uid] = runMovementApSpent.GetValueOrDefault(uid) + cost;
@@ -312,7 +311,7 @@ public partial class BattleRoom
                             }
                         }
                     }
-                    else if (string.Equals(actionType, ActionAttack, StringComparison.OrdinalIgnoreCase))
+                    else if (string.Equals(actionType, BattleActionTypes.Attack, StringComparison.OrdinalIgnoreCase))
                     {
                         int magazineSize = GetWeaponMagazineSizeFromDbByItemId(unit.WeaponItemId);
                         if (magazineSize > 0 && unit.CurrentMagazineRounds <= 0)
@@ -339,7 +338,7 @@ public partial class BattleRoom
                                 }
                                 else
                                 {
-                                    executed.ToPosition = new HexPositionDto { Col = ac, Row = ar };
+                                    executed.ToHex = new HexPositionDto { Col = ac, Row = ar }.Hex;
                                     int dist = HexSpawn.HexDistance(currentPos.col, currentPos.row, ac, ar);
                                     int weaponRange = Math.Max(0, unit.WeaponRange);
                                     int rawDamage = RollWeaponDamageInclusive(unit);
@@ -361,7 +360,7 @@ public partial class BattleRoom
                                         if (firstWall.HasValue)
                                         {
                                             var wc = firstWall.Value;
-                                            executed.Succeeded = true;
+                                            executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
                                             executed.Damage = 0;
                                             int dWall = HexSpawn.HexDistance(currentPos.col, currentPos.row, wc.col, wc.row);
                                             ApplyWallDamageAndRecord(tick, wc, ApplyOverRangeDamage(rawDamage, dWall, weaponRange), bal, mapUpdates);
@@ -371,7 +370,7 @@ public partial class BattleRoom
                                         {
                                             // Соседний гекс: линия «между» пуста — стена на гексе прицела.
                                             (int col, int row) wc = (ac, ar);
-                                            executed.Succeeded = true;
+                                            executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
                                             executed.Damage = 0;
                                             int dWall = HexSpawn.HexDistance(currentPos.col, currentPos.row, wc.col, wc.row);
                                             ApplyWallDamageAndRecord(tick, wc, ApplyOverRangeDamage(rawDamage, dWall, weaponRange), bal, mapUpdates);
@@ -434,13 +433,13 @@ public partial class BattleRoom
 
                                             if (hexHitId == null || hexHitUnit == null)
                                             {
-                                                executed.Succeeded = true;
+                                                executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
                                                 executed.Damage = 0;
                                             }
                                             else
                                             {
                                                 executed.TargetUnitId = hexHitId;
-                                                executed.ToPosition = new HexPositionDto { Col = hexHitPos.col, Row = hexHitPos.row };
+                                                executed.ToHex = new HexPositionDto { Col = hexHitPos.col, Row = hexHitPos.row }.Hex;
 
                                                 _coverLineBuffer.Clear();
                                                 _coverLineBuffer.AddRange(_hexLineBuffer);
@@ -468,9 +467,9 @@ public partial class BattleRoom
                                                         anyRockHex = true;
                                                 }
 
-                                                string tgtPostureHex = postureByUnit.TryGetValue(hexHitId, out var tpHex) ? NormalizePosture(tpHex) : PostureWalk;
-                                                bool rockCoverHex = anyRockHex && (string.Equals(tgtPostureHex, PostureSit, StringComparison.OrdinalIgnoreCase)
-                                                    || string.Equals(tgtPostureHex, PostureHide, StringComparison.OrdinalIgnoreCase));
+                                                string tgtPostureHex = postureByUnit.TryGetValue(hexHitId, out var tpHex) ? NormalizePosture(tpHex) : BattlePostures.Walk;
+                                                bool rockCoverHex = anyRockHex && (string.Equals(tgtPostureHex, BattlePostures.Sit, StringComparison.OrdinalIgnoreCase)
+                                                    || string.Equals(tgtPostureHex, BattlePostures.Hide, StringComparison.OrdinalIgnoreCase));
                                                 var hitDbgHex = BuildHitFormulaDebug(
                                                     GetBaseHitProbabilityFromRange(distHex, weaponRangeHex, unit.WeaponIsSniper),
                                                     anyTreeHex,
@@ -484,7 +483,7 @@ public partial class BattleRoom
                                                 executed.HitSucceeded = hitHex;
                                                 if (!hitHex)
                                                 {
-                                                    executed.Succeeded = true;
+                                                    executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
                                                     executed.TargetUnitId = hexHitId;
                                                     executed.Damage = 0;
                                                     attackTargetByUnit[uid] = hexHitId;
@@ -494,7 +493,7 @@ public partial class BattleRoom
                                                     int damageHex = ApplyOverRangeDamage(rawDamage, distHex, weaponRangeHex);
                                                     hexHitUnit.CurrentHp = Math.Max(0, hexHitUnit.CurrentHp - damageHex);
                                                     Units[hexHitId] = hexHitUnit;
-                                                    executed.Succeeded = true;
+                                                    executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
                                                     executed.TargetUnitId = hexHitId;
                                                     executed.Damage = damageHex;
                                                     attackTargetByUnit[uid] = hexHitId;
@@ -530,7 +529,7 @@ public partial class BattleRoom
                         }
                         else
                         {
-                            executed.ToPosition = new HexPositionDto { Col = targetPos.col, Row = targetPos.row };
+                            executed.ToHex = new HexPositionDto { Col = targetPos.col, Row = targetPos.row }.Hex;
                             int dist = HexSpawn.HexDistance(currentPos.col, currentPos.row, targetPos.col, targetPos.row);
                             int weaponRange = Math.Max(0, unit.WeaponRange);
                             string weaponCategory = GetWeaponCategoryFromDbByItemId(unit.WeaponItemId);
@@ -538,7 +537,7 @@ public partial class BattleRoom
                             if (isMelee && dist > 1)
                             {
                                 // Tick is consumed, but melee does nothing when target moved out of range.
-                                executed.Succeeded = true;
+                                executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
                                 executed.TargetUnitId = resolvedTargetId;
                                 executed.Damage = 0;
                                 attackTargetByUnit[uid] = resolvedTargetId;
@@ -562,7 +561,7 @@ public partial class BattleRoom
                                 if (firstWall.HasValue)
                                 {
                                     var wc = firstWall.Value;
-                                    executed.Succeeded = true;
+                                    executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
                                     executed.TargetUnitId = resolvedTargetId;
                                     executed.Damage = 0;
                                     int dWall = HexSpawn.HexDistance(currentPos.col, currentPos.row, wc.col, wc.row);
@@ -596,7 +595,7 @@ public partial class BattleRoom
                                             resolvedTargetId = oid;
                                             targetUnit = ou;
                                             targetPos = positions[oid];
-                                            executed.ToPosition = new HexPositionDto { Col = targetPos.col, Row = targetPos.row };
+                                            executed.ToHex = new HexPositionDto { Col = targetPos.col, Row = targetPos.row }.Hex;
                                             dist = HexSpawn.HexDistance(currentPos.col, currentPos.row, targetPos.col, targetPos.row);
                                             HexSpawn.GetHexLineBetweenExclusive(currentPos.col, currentPos.row, targetPos.col, targetPos.row, _hexLineBuffer);
                                             losRedirected = true;
@@ -629,9 +628,9 @@ public partial class BattleRoom
                                             anyRock = true;
                                     }
 
-                                    string tgtPosture = postureByUnit.TryGetValue(resolvedTargetId, out var tp) ? NormalizePosture(tp) : PostureWalk;
-                                    bool rockCover = anyRock && (string.Equals(tgtPosture, PostureSit, StringComparison.OrdinalIgnoreCase)
-                                        || string.Equals(tgtPosture, PostureHide, StringComparison.OrdinalIgnoreCase));
+                                    string tgtPosture = postureByUnit.TryGetValue(resolvedTargetId, out var tp) ? NormalizePosture(tp) : BattlePostures.Walk;
+                                    bool rockCover = anyRock && (string.Equals(tgtPosture, BattlePostures.Sit, StringComparison.OrdinalIgnoreCase)
+                                        || string.Equals(tgtPosture, BattlePostures.Hide, StringComparison.OrdinalIgnoreCase));
                                     var hitDbg = BuildHitFormulaDebug(
                                         GetBaseHitProbabilityFromRange(dist, weaponRange, unit.WeaponIsSniper),
                                         anyTree,
@@ -645,7 +644,7 @@ public partial class BattleRoom
                                     executed.HitSucceeded = hit;
                                     if (!hit)
                                     {
-                                        executed.Succeeded = true;
+                                        executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
                                         executed.TargetUnitId = resolvedTargetId;
                                         executed.Damage = 0;
                                         attackTargetByUnit[uid] = resolvedTargetId;
@@ -655,7 +654,7 @@ public partial class BattleRoom
                                         int damage = ApplyOverRangeDamage(rawDamage, dist, weaponRange);
                                         targetUnit.CurrentHp = Math.Max(0, targetUnit.CurrentHp - damage);
                                         Units[resolvedTargetId] = targetUnit;
-                                        executed.Succeeded = true;
+                                        executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
                                         executed.TargetUnitId = resolvedTargetId;
                                         executed.Damage = damage;
                                         attackTargetByUnit[uid] = resolvedTargetId;
@@ -672,26 +671,26 @@ public partial class BattleRoom
                         }
                         }
 FinishAttackAction:
-                        if (executed.Succeeded && magazineSize > 0)
+                        if (BattleExecutedActionStatuses.IsSucceeded(executed.ActionStatus) && magazineSize > 0)
                         {
                             unit.CurrentMagazineRounds = Math.Max(0, unit.CurrentMagazineRounds - 1);
                             Units[uid] = unit;
                         }
                     }
-                    else if (string.Equals(actionType, ActionChangePosture, StringComparison.OrdinalIgnoreCase))
+                    else if (string.Equals(actionType, BattleActionTypes.ChangePosture, StringComparison.OrdinalIgnoreCase))
                     {
                         string nextPosture = NormalizePosture(action.Posture);
                         postureByUnit[uid] = nextPosture;
-                        executed.Succeeded = true;
+                        executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
                         executed.Posture = nextPosture;
                     }
-                    else if (string.Equals(actionType, ActionWait, StringComparison.OrdinalIgnoreCase))
+                    else if (string.Equals(actionType, BattleActionTypes.Wait, StringComparison.OrdinalIgnoreCase))
                     {
-                        executed.Succeeded = true;
+                        executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
                     }
-                    else if (string.Equals(actionType, ActionReload, StringComparison.OrdinalIgnoreCase))
+                    else if (string.Equals(actionType, BattleActionTypes.Reload, StringComparison.OrdinalIgnoreCase))
                     {
-                        executed.Succeeded = true;
+                        executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
                         int magazineSize = GetWeaponMagazineSizeFromDbByItemId(unit.WeaponItemId);
                         int before = Math.Max(0, unit.CurrentMagazineRounds);
                         int after = Math.Max(0, magazineSize);
@@ -725,7 +724,7 @@ FinishAttackAction:
                             }
                         }
                     }
-                    else if (string.Equals(actionType, ActionEquipWeapon, StringComparison.OrdinalIgnoreCase))
+                    else if (string.Equals(actionType, BattleActionTypes.EquipWeapon, StringComparison.OrdinalIgnoreCase))
                     {
                         long weaponItemId = action.WeaponItemId ?? 0;
                         if (_weaponDb == null && _medicineDb == null)
@@ -811,10 +810,10 @@ FinishAttackAction:
                                 executed.FailureReason = "Unknown weapon";
 
                             if (applied)
-                                executed.Succeeded = true;
+                                executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
                         }
                     }
-                    else if (string.Equals(actionType, ActionUseItem, StringComparison.OrdinalIgnoreCase))
+                    else if (string.Equals(actionType, BattleActionTypes.UseItem, StringComparison.OrdinalIgnoreCase))
                     {
                         if (_medicineDb == null || !_medicineDb.TryGetMedicineByItemId(unit.WeaponItemId, out var med))
                         {
@@ -862,7 +861,7 @@ FinishAttackAction:
                                 unit.CurrentHp = Math.Clamp(beforeHp + heal, 0, Math.Max(1, unit.MaxHp));
                                 executed.Healed = Math.Max(0, unit.CurrentHp - beforeHp);
                                 Units[uid] = unit;
-                                executed.Succeeded = true;
+                                executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
                                 if (!consumedByPlayerAndItemId.TryGetValue(pid, out consumedByItem))
                                 {
                                     consumedByItem = new Dictionary<long, int>();
@@ -877,12 +876,13 @@ FinishAttackAction:
                         executed.FailureReason = "Unknown action type";
                     }
 
-                    if (!executed.Succeeded)
+                    if (!BattleExecutedActionStatuses.IsSucceeded(executed.ActionStatus))
                     {
                         accepted[uid] = false;
                         rejectedReason[uid] ??= executed.FailureReason;
                     }
 
+                    FinalizeExecutedBattleActionForWire(executed);
                     executedActions[uid].Add(executed);
                 }
             } while (executedAnyActionThisPass);
@@ -909,8 +909,8 @@ FinishAttackAction:
                 int currentApAfterPenalty = GetNextRoundAp(us, fatigueAp);
                 string? lastMovePosture = lastMovePostureByUnit.GetValueOrDefault(uid);
                 bool hadRunMovement = hadRunMovementByUnit.GetValueOrDefault(uid);
-                bool canRecoverAfterRun = string.Equals(lastMovePosture, PostureWalk, StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(lastMovePosture, PostureSit, StringComparison.OrdinalIgnoreCase);
+                bool canRecoverAfterRun = string.Equals(lastMovePosture, BattlePostures.Walk, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(lastMovePosture, BattlePostures.Sit, StringComparison.OrdinalIgnoreCase);
                 if (!hadRunMovement || canRecoverAfterRun)
                     currentApAfterPenalty = ApplyRestRecovery(currentApAfterPenalty, maxAp);
                 fatigueAp = Math.Max(0, maxAp - currentApAfterPenalty);
@@ -918,7 +918,7 @@ FinishAttackAction:
 
             us.Col = final.col;
             us.Row = final.row;
-            us.Posture = postureByUnit.TryGetValue(uid, out var finalPosture) ? NormalizePosture(finalPosture) : PostureWalk;
+            us.Posture = postureByUnit.TryGetValue(uid, out var finalPosture) ? NormalizePosture(finalPosture) : BattlePostures.Walk;
             SetFatigueAp(us, fatigueAp, maxAp);
             us.CurrentAp = GetNextRoundAp(us, fatigueAp);
             Units[uid] = us;
@@ -983,53 +983,29 @@ FinishAttackAction:
                     }
                 }
             }
-            string weaponCategory = "cold";
-            if (_weaponDb != null && _weaponDb.TryGetWeaponByItemId(us.WeaponItemId, out var weaponRowForCat))
-            {
-                if (!string.IsNullOrWhiteSpace(weaponRowForCat.Category))
-                    weaponCategory = weaponRowForCat.Category.Trim();
-                else if (string.Equals(weaponRowForCat.ItemType, "medicine", StringComparison.OrdinalIgnoreCase))
-                    weaponCategory = "medicine";
-            }
-            else if (_medicineDb != null && _medicineDb.TryGetMedicineByItemId(us.WeaponItemId, out _))
-            {
-                // Items only in medicine table (not in weapons) must still report category for clients.
-                weaponCategory = "medicine";
-            }
+            string status = UnitStatuses.Alive;
+            bool dead = !alive.GetValueOrDefault(uid, us.CurrentHp > 0);
+            if (hasFled)
+                status = UnitStatuses.Fled;
+            else if (isEscaping)
+                status = UnitStatuses.Escaping;
+            else if (dead)
+                status = UnitStatuses.Dead;
 
             results.Add(new PlayerTurnResultDto
             {
-                UnitId = uid,
+                UnitId = us.UnitType == UnitType.Player && TryGetBattlePlayerUserId(playerId, out long playerUserId)
+                    ? playerUserId.ToString()
+                    : uid.Replace("mob:", "mob"),
                 UnitType = us.UnitType,
-                PlayerId = playerId,
                 Accepted = accepted.TryGetValue(uid, out var ok) && ok,
-                FinalPosition = new HexPositionDto { Col = final.col, Row = final.row },
-                ActualPath = actualPaths.TryGetValue(uid, out var path) ? path.ToArray() : new[] { new HexPositionDto { Col = final.col, Row = final.row } },
                 CurrentAp = us.CurrentAp,
                 PenaltyFraction = us.PenaltyFraction,
-                ApSpentThisTurn = apSpentByUnit.GetValueOrDefault(uid),
                 RejectedReason = rejectedReason.TryGetValue(uid, out var rr) ? rr : null,
-                MaxHp = us.MaxHp,
                 CurrentHp = us.CurrentHp,
-                IsDead = !alive.GetValueOrDefault(uid, us.CurrentHp > 0),
-                AttackTargetUnitId = attackTargetByUnit.TryGetValue(uid, out var targetId) ? targetId : null,
-                DamageDealt = damageByUnit.TryGetValue(uid, out var dealt) ? dealt : 0,
-                PostureAtRoundStart = roundStartPostureByUnit.TryGetValue(uid, out var prs) ? prs : PostureWalk,
-                CurrentPosture = us.Posture,
-                WeaponItemId = us.WeaponItemId,
-                WeaponCategory = weaponCategory,
-                WeaponDamageMin = us.WeaponDamageMin,
-                WeaponDamage = us.WeaponDamage,
-                WeaponRange = us.WeaponRange,
-                WeaponAttackApCost = Math.Max(1, us.WeaponAttackApCost),
-                CurrentMagazineRounds = us.CurrentMagazineRounds,
-                WeaponTightness = us.WeaponTightness,
-                WeaponTrajectoryHeight = us.WeaponTrajectoryHeight,
-                WeaponIsSniper = us.WeaponIsSniper,
+                UnitStatus = status,
+                Level = us.UnitType == UnitType.Mob ? 1 : null,
                 ExecutedActions = unitActions.ToArray(),
-                IsEscaping = isEscaping,
-                EscapeRoundsRemaining = escapeRoundsRemaining,
-                HasFled = hasFled,
                 TeamId = us.UnitType == UnitType.Player ? us.TeamId : -1
             });
         }
@@ -1105,5 +1081,23 @@ FinishAttackAction:
         // Solo / auto-submitted escapers: everyone already in Submissions — close the next round immediately (no timer wait for "mob").
         if (!battleFinished && Players.Count > 0 && Submissions.Count >= Players.Count)
             CloseRound(fromTimer: false);
+    }
+
+    /// <summary>Minimal wire JSON for MoveStep; clear failure reason on any successful action.</summary>
+    private static void FinalizeExecutedBattleActionForWire(ExecutedBattleActionDto e)
+    {
+        if (BattleExecutedActionStatuses.IsSucceeded(e.ActionStatus))
+            e.FailureReason = null;
+
+        if (!string.Equals(e.ActionType, BattleActionTypes.MoveStep, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        e.TargetUnitId = null;
+        e.BodyPart = 0;
+        e.Damage = 0;
+        e.Healed = 0;
+        e.TargetDied = false;
+        e.HitProbability = null;
+        e.HitSucceeded = null;
     }
 }

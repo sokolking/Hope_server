@@ -95,7 +95,7 @@
   - `quality`, `weapon_condition` (INT) — **только хранение контента**, в расчёты боя **не входят** (п. 3.10).
 - Сид строки **`fist`** с дефолтами (в т.ч. spread 0, trajectory 1).
 
-**Код:** `BattlePostgresDatabase.cs`, `BattleWeaponDatabase.cs`, DTO **`BattleWeaponBrowseRowDto`** в `Models/BattleModels.cs`.
+**Код:** `BattlePostgresDatabase.cs`, `BattleWeaponDatabase.cs`, DTO **`BattleWeaponBrowseRowDto`** в `Models/Dtos/BattleWeaponBrowseRowDto.cs`.
 
 **API:** `WeaponUpsertRequest` и `UpsertWeapon` принимают новые поля; ответ **equip-weapon** включает `weaponSpreadPenalty`, `weaponTrajectoryHeight`.
 
@@ -159,7 +159,7 @@
 | ЛС и теги стен | `BattleRoom.LineOfFire.cs`, `BattleRoom.WallObstacles.cs` |
 | Профили, equip | `BattleRoom.Players.cs`, `BattleRoomStore.cs`, `Program.cs` |
 | Юниты, спавн | `BattleRoom.UnitsLifecycle.cs`, `BattleRoom.SpawnPayloads.cs`, `BattleRoom.SubmitTurn.cs` |
-| DTO | `Models/BattleModels.cs` |
+| DTO | `Models/Dtos/*.cs` (по одному типу на файл, namespace `BattleServer.Models`) |
 | БД | `BattlePostgresDatabase.cs`, `BattleWeaponDatabase.cs` |
 | Клиент | `Assets/Scripts/GameSession.cs` |
 

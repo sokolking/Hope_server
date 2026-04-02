@@ -52,9 +52,36 @@ public partial class BattleRoom
 
             if (results != null)
             {
-                var dto = results.FirstOrDefault(r => r.UnitId == uid);
+                string lookupId = uid;
+                if (unit.UnitType == UnitType.Player)
+                {
+                    string? pid = PlayerToUnitId.FirstOrDefault(kv => kv.Value == uid).Key;
+                    if (!string.IsNullOrEmpty(pid) && TryGetBattlePlayerUserId(pid, out long userId))
+                        lookupId = userId.ToString();
+                }
+                else if (uid.StartsWith("mob:", StringComparison.Ordinal))
+                {
+                    lookupId = uid.Replace("mob:", "mob");
+                }
+
+                var dto = results.FirstOrDefault(r => r.UnitId == lookupId);
                 if (dto != null)
-                    dto.FinalPosition = new HexPositionDto { Col = nc, Row = nr };
+                {
+                    string fromHex = HexTagFromColRow(uc, ur);
+                    string toHex = HexTagFromColRow(nc, nr);
+                    var step = new ExecutedBattleActionDto
+                    {
+                        ActionType = BattleActionTypes.MoveStep,
+                        Tick = ZoneShrinkMapTick,
+                        ActionStatus = BattleExecutedActionStatuses.Succeeded,
+                        FromHex = fromHex,
+                        ToHex = toHex,
+                        Posture = BattlePostures.Walk
+                    };
+                    var list = dto.ExecutedActions != null ? dto.ExecutedActions.ToList() : new List<ExecutedBattleActionDto>();
+                    list.Add(step);
+                    dto.ExecutedActions = list.ToArray();
+                }
             }
         }
     }

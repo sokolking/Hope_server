@@ -28,18 +28,18 @@ public partial class BattleRoom
     private static string NormalizePosture(string? posture)
     {
         if (string.IsNullOrWhiteSpace(posture))
-            return PostureWalk;
+            return BattlePostures.Walk;
 
         return posture.Trim().ToLowerInvariant() switch
         {
-            PostureRun => PostureRun,
-            PostureSit => PostureSit,
-            PostureHide => PostureHide,
-            _ => PostureWalk
+            BattlePostures.Run => BattlePostures.Run,
+            BattlePostures.Sit => BattlePostures.Sit,
+            BattlePostures.Hide => BattlePostures.Hide,
+            _ => BattlePostures.Walk
         };
     }
 
-    private static bool CanMoveInPosture(string? posture) => NormalizePosture(posture) != PostureHide;
+    private static bool CanMoveInPosture(string? posture) => NormalizePosture(posture) != BattlePostures.Hide;
 
     /// <param name="zeroBasedStepIndex">0 = first move step of the round after <c>movementStepsTaken</c> already-completed steps.</param>
     private static int GetMovementStepCost(string? posture, int zeroBasedStepIndex)
@@ -47,8 +47,8 @@ public partial class BattleRoom
         int baseCost = GetMoveCost(zeroBasedStepIndex, 1);
         return NormalizePosture(posture) switch
         {
-            PostureRun => Math.Max(1, (int)Math.Ceiling(baseCost * RunCostMultiplier)),
-            PostureSit or PostureHide => Math.Max(1, (int)Math.Floor(baseCost * SitCostMultiplier)),
+            BattlePostures.Run => Math.Max(1, (int)Math.Ceiling(baseCost * RunCostMultiplier)),
+            BattlePostures.Sit or BattlePostures.Hide => Math.Max(1, (int)Math.Floor(baseCost * SitCostMultiplier)),
             _ => Math.Max(1, baseCost)
         };
     }

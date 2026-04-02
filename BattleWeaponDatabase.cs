@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Collections.Concurrent;
 using BattleServer.Models;
 using Npgsql;
 
@@ -8,6 +9,7 @@ namespace BattleServer;
 public sealed class BattleWeaponDatabase
 {
     private readonly BattlePostgresDatabase _database;
+    private readonly ConcurrentDictionary<long, BattleWeaponBrowseRowDto> _weaponByItemIdCache = new();
 
     /// <summary>Canonical weapon <c>category</c> codes (DB + API). Order is stable for admin UI.</summary>
     public static readonly string[] CanonicalWeaponCategories =
@@ -89,6 +91,11 @@ LIMIT 1;
         weapon = DefaultFistRow();
         if (itemId <= 0)
             return false;
+        if (_weaponByItemIdCache.TryGetValue(itemId, out var cached))
+        {
+            weapon = CloneWeaponRow(cached);
+            return true;
+        }
         using var connection = _database.DataSource.OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = $"""
@@ -105,6 +112,7 @@ LIMIT 1;
             return false;
         weapon = ReadWeaponRow(reader);
         ApplyWeaponCombatDefaults(weapon);
+        _weaponByItemIdCache[itemId] = CloneWeaponRow(weapon);
         return true;
     }
 
@@ -348,6 +356,42 @@ SET item_id = EXCLUDED.item_id,
         command.Parameters.AddWithValue("inventorySlotWidth", invW);
         command.ExecuteNonQuery();
         tx.Commit();
+        _weaponByItemIdCache[itemId] = CloneWeaponRow(new BattleWeaponBrowseRowDto
+        {
+            Id = itemId,
+            Name = d.Name.Trim(),
+            DamageMin = dMin,
+            DamageMax = dMax,
+            Range = d.Range,
+            IconKey = ik,
+            AttackApCost = d.AttackApCost,
+            Tightness = d.Tightness,
+            TrajectoryHeight = d.TrajectoryHeight,
+            Quality = d.Quality,
+            WeaponCondition = d.WeaponCondition,
+            IsSniper = d.IsSniper,
+            Mass = d.Mass,
+            AmmoTypeId = ammoTypeId,
+            ArmorPierce = d.ArmorPierce,
+            MagazineSize = d.MagazineSize,
+            ReloadApCost = d.ReloadApCost,
+            Category = category,
+            ReqLevel = d.ReqLevel,
+            ReqStrength = d.ReqStrength,
+            ReqEndurance = d.ReqEndurance,
+            ReqAccuracy = d.ReqAccuracy,
+            ReqMasteryCategory = d.ReqMasteryCategory ?? "",
+            StatEffectStrength = d.StatEffectStrength,
+            StatEffectEndurance = d.StatEffectEndurance,
+            StatEffectAccuracy = d.StatEffectAccuracy,
+            DamageType = d.DamageType ?? "physical",
+            BurstRounds = d.BurstRounds,
+            BurstApCost = d.BurstApCost,
+            InventorySlotWidth = invW,
+            InventoryGrid = Math.Clamp(d.InventoryGrid, 0, 2),
+            IsEquippable = d.IsEquippable,
+            ItemType = NormalizeItemType(d.ItemType, "weapon")
+        });
     }
 
     public BattleWeaponMetaDto GetWeaponMeta()
@@ -443,6 +487,8 @@ ORDER BY 1;
             return false;
         }
 
+        _weaponByItemIdCache.TryRemove(itemId, out _);
+
         return true;
     }
 
@@ -477,7 +523,47 @@ ORDER BY 1;
             InsertWeapon(connection, tx, d);
 
         tx.Commit();
+        _weaponByItemIdCache.Clear();
     }
+
+    private static BattleWeaponBrowseRowDto CloneWeaponRow(BattleWeaponBrowseRowDto src) =>
+        new()
+        {
+            Id = src.Id,
+            Name = src.Name,
+            DamageMin = src.DamageMin,
+            DamageMax = src.DamageMax,
+            Range = src.Range,
+            IconKey = src.IconKey,
+            AttackApCost = src.AttackApCost,
+            Tightness = src.Tightness,
+            TrajectoryHeight = src.TrajectoryHeight,
+            Quality = src.Quality,
+            WeaponCondition = src.WeaponCondition,
+            IsSniper = src.IsSniper,
+            Mass = src.Mass,
+            AmmoTypeId = src.AmmoTypeId,
+            AmmoName = src.AmmoName,
+            ArmorPierce = src.ArmorPierce,
+            MagazineSize = src.MagazineSize,
+            ReloadApCost = src.ReloadApCost,
+            Category = src.Category,
+            ReqLevel = src.ReqLevel,
+            ReqStrength = src.ReqStrength,
+            ReqEndurance = src.ReqEndurance,
+            ReqAccuracy = src.ReqAccuracy,
+            ReqMasteryCategory = src.ReqMasteryCategory,
+            StatEffectStrength = src.StatEffectStrength,
+            StatEffectEndurance = src.StatEffectEndurance,
+            StatEffectAccuracy = src.StatEffectAccuracy,
+            DamageType = src.DamageType,
+            BurstRounds = src.BurstRounds,
+            BurstApCost = src.BurstApCost,
+            InventorySlotWidth = src.InventorySlotWidth,
+            InventoryGrid = src.InventoryGrid,
+            IsEquippable = src.IsEquippable,
+            ItemType = src.ItemType
+        };
 
     private static void InsertWeapon(NpgsqlConnection connection, NpgsqlTransaction tx, BattleWeaponUpsertDto d)
     {

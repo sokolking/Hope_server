@@ -262,10 +262,10 @@ BattleRoom.RoundClosedForPush += room =>
     {
         foreach (var r in turn.Results)
         {
-            if (r == null || r.UnitType != UnitType.Player || string.IsNullOrWhiteSpace(r.PlayerId))
+            if (r == null || r.UnitType != UnitType.Player || string.IsNullOrWhiteSpace(r.UnitId))
                 continue;
-            int rewardExp = r.IsDead ? 50 : 100;
-            if (room.PlayerToUserId.TryGetValue(r.PlayerId, out long rewardUid))
+            int rewardExp = string.Equals(r.UnitStatus, UnitStatuses.Dead, StringComparison.OrdinalIgnoreCase) ? 50 : 100;
+            if (long.TryParse(r.UnitId, out long rewardUid))
                 battleUserDb.TryAwardBattleExperience(rewardUid, rewardExp, out _);
         }
     }

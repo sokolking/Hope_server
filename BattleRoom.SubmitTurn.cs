@@ -43,7 +43,7 @@ public partial class BattleRoom
                     WeaponTightness = 1.0,
                     WeaponTrajectoryHeight = 1,
                     WeaponIsSniper = false,
-                    Posture = PostureWalk
+                    Posture = BattlePostures.Walk
                 };
             }
         }

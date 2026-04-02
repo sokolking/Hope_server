@@ -48,7 +48,7 @@ public partial class BattleRoom
             {
                 actions.Add(new QueuedBattleActionDto
                 {
-                    ActionType = "MoveStep",
+                    ActionType = BattleActionTypes.MoveStep,
                     TargetPosition = new HexPositionDto { Col = bestRoute[i].col, Row = bestRoute[i].row },
                     Cost = 1
                 });
@@ -63,7 +63,7 @@ public partial class BattleRoom
         {
             actions.Add(new QueuedBattleActionDto
             {
-                ActionType = "Attack",
+                ActionType = BattleActionTypes.Attack,
                 TargetUnitId = target.UnitId,
                 Cost = 1
             });
@@ -102,7 +102,7 @@ public partial class BattleRoom
         {
             return new QueuedBattleActionDto
             {
-                ActionType = "Attack",
+                ActionType = BattleActionTypes.Attack,
                 TargetUnitId = targetId,
                 Cost = 1
             };
@@ -145,7 +145,7 @@ public partial class BattleRoom
         var next = bestRoute[1];
         return new QueuedBattleActionDto
         {
-            ActionType = "MoveStep",
+            ActionType = BattleActionTypes.MoveStep,
             TargetPosition = new HexPositionDto { Col = next.col, Row = next.row },
             Cost = 1
         };

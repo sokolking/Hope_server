@@ -66,7 +66,7 @@ public partial class BattleRoom
         var current = (unit.Col, unit.Row);
         foreach (var action in actions)
         {
-            if (action == null || !string.Equals(action.ActionType, "MoveStep", StringComparison.OrdinalIgnoreCase))
+            if (action == null || !string.Equals(action.ActionType, BattleActionTypes.MoveStep, StringComparison.OrdinalIgnoreCase))
                 continue;
             if (action.TargetPosition == null)
                 continue;
@@ -89,7 +89,7 @@ public partial class BattleRoom
         {
             actions.Add(new QueuedBattleActionDto
             {
-                ActionType = "MoveStep",
+                ActionType = BattleActionTypes.MoveStep,
                 TargetPosition = new HexPositionDto { Col = path[i].Col, Row = path[i].Row },
                 Cost = GetMoveCost(i - 1, 1)
             });

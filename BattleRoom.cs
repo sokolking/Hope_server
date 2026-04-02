@@ -7,17 +7,6 @@ namespace BattleServer;
 /// <summary>Состояние одного боя (2 игрока). Этап 3: пошаговая симуляция, приоритет по порядку отправки хода.</summary>
 public partial class BattleRoom
 {
-    private const string PostureWalk = "walk";
-    private const string PostureRun = "run";
-    private const string PostureSit = "sit";
-    private const string PostureHide = "hide";
-    private const string ActionMoveStep = "MoveStep";
-    private const string ActionAttack = "Attack";
-    private const string ActionChangePosture = "ChangePosture";
-    private const string ActionWait = "Wait";
-    private const string ActionReload = "Reload";
-    private const string ActionEquipWeapon = "EquipWeapon";
-    private const string ActionUseItem = "UseItem";
     private const int ChangePostureCost = 2;
     private const float RunCostMultiplier = 0.5f;
     private const float SitCostMultiplier = 1.5f;

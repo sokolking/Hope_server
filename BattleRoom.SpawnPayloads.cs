@@ -78,7 +78,7 @@ public partial class BattleRoom
                     maxAp = prof.Item2;
                 }
 
-                items.Add((playerId, Players[playerId].col, Players[playerId].row, maxAp, maxAp, maxHp, maxHp, PostureWalk, wid, wcat, wdm, wd, wr, wac, wmag, wtn, wth, wsn, dn, lv, ComputePvpTeamIdForPlayer(playerId), cs.s, cs.ag, cs.i, cs.e, cs.acc, cs.intl));
+                items.Add((playerId, Players[playerId].col, Players[playerId].row, maxAp, maxAp, maxHp, maxHp, BattlePostures.Walk, wid, wcat, wdm, wd, wr, wac, wmag, wtn, wth, wsn, dn, lv, ComputePvpTeamIdForPlayer(playerId), cs.s, cs.ag, cs.i, cs.e, cs.acc, cs.intl));
             }
         }
 

@@ -52,7 +52,7 @@ public partial class BattleRoom
                 WeaponTightness = profile.Item9,
                 WeaponTrajectoryHeight = profile.Item10,
                 WeaponIsSniper = profile.Item11,
-                Posture = PostureWalk
+                Posture = BattlePostures.Walk
             };
         }
 
@@ -120,7 +120,7 @@ public partial class BattleRoom
                     WeaponTightness = 1.0,
                     WeaponTrajectoryHeight = 1,
                     WeaponIsSniper = false,
-                    Posture = PostureWalk
+                    Posture = BattlePostures.Walk
                 };
             }
         }

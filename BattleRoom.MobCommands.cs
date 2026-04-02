@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using BattleServer.Models;
@@ -43,8 +44,8 @@ public partial class BattleRoom
                     .OrderBy(p => HexSpawn.HexDistance(mob.Col, mob.Row, p.Col, p.Row))
                     .First();
                 var actions = BuildMobActionQueue(mob, target);
-                int moveCount = actions.Count(a => a != null && a.ActionType == "MoveStep");
-                int attackCount = actions.Count(a => a != null && a.ActionType == "Attack");
+                int moveCount = actions.Count(a => a != null && string.Equals(a.ActionType, BattleActionTypes.MoveStep, StringComparison.OrdinalIgnoreCase));
+                int attackCount = actions.Count(a => a != null && string.Equals(a.ActionType, BattleActionTypes.Attack, StringComparison.OrdinalIgnoreCase));
                 Console.WriteLine(
                     $"[mobAI] battleId={BattleId} mob={mob.UnitId} mobPos=({mob.Col},{mob.Row}) ap={mob.CurrentAp} " +
                     $"target={target.UnitId} targetPos=({target.Col},{target.Row}) moveActions={moveCount} attackActions={attackCount}");
