@@ -76,18 +76,10 @@ LIMIT 1;
         using var command = connection.CreateCommand();
         command.CommandText = """
 SELECT u.id, u.username, u.password, u.experience, u.strength, u.endurance, u.accuracy, u.max_hp, u.current_hp, u.max_ap,
-       eq.equipped_item_id,
+       u.equipped_item_id,
        COALESCE(i.name, '') AS equipped_item_name
 FROM users u
-LEFT JOIN LATERAL (
-    SELECT COALESCE(u.equipped_item_id, (
-        SELECT ii.item_id
-        FROM user_inventory_items ii
-        WHERE ii.user_id = u.id AND ii.is_equipped
-        LIMIT 1
-    )) AS equipped_item_id
-) eq ON TRUE
-LEFT JOIN items i ON i.id = eq.equipped_item_id
+LEFT JOIN items i ON i.id = u.equipped_item_id
 ORDER BY u.id
 LIMIT @take;
 """;

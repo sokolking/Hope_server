@@ -380,5 +380,6 @@ CREATE UNIQUE INDEX uq_weapons_item_id ON public.weapons USING btree (item_id);
 
 
 -- Indices
-CREATE UNIQUE INDEX uq_items_name_unique ON public.items USING btree (lower(name));
+DROP INDEX IF EXISTS public.uq_items_name_unique;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_items_name_unique ON public.items USING btree (lower(name));
 ALTER TABLE "public"."medicine" ADD FOREIGN KEY ("item_id") REFERENCES "public"."items"("id") ON DELETE CASCADE;

@@ -306,7 +306,7 @@ public static class BattleUsersDashboardPage
     }
 
     function escapeHtml(text) {
-      return text
+      return String(text ?? '')
         .replaceAll('&', '&amp;')
         .replaceAll('<', '&lt;')
         .replaceAll('>', '&gt;');
@@ -315,7 +315,10 @@ public static class BattleUsersDashboardPage
     function renderUsers() {
       const query = userSearchEl.value.trim().toLowerCase();
       userListEl.innerHTML = '';
-      const filtered = users.filter(u => !query || u.username.toLowerCase().includes(query));
+      const filtered = users.filter(u => {
+        const username = String(u && u.username != null ? u.username : '').toLowerCase();
+        return !query || username.includes(query);
+      });
       if (!filtered.length) {
         userListEl.innerHTML = '<div class="empty">No users found.</div>';
         return;
@@ -734,31 +737,73 @@ public static class BattleUsersDashboardPage
 
     async function loadUsers() {
       setStatus('loading users...');
-      const [usersResp, weaponsResp, ammoResp, medicineResp] = await Promise.all([
-        fetch('/api/db/users?take=200'),
-        fetch('/api/db/weapons?take=200'),
-        fetch('/api/db/items/catalog?itemType=ammo&take=300'),
-        fetch('/api/db/items/catalog?itemType=medicine&take=300')
+      async function fetchJsonWithTimeout(url, timeoutMs) {
+        const controller = new AbortController();
+        const useTimeout = Number(timeoutMs) > 0;
+        const timer = useTimeout ? setTimeout(() => controller.abort(), timeoutMs) : null;
+        try {
+          const resp = await fetch(url, { signal: controller.signal });
+          if (!resp.ok) {
+            let err = '';
+            try {
+              const data = await resp.json();
+              err = data && data.error ? String(data.error) : '';
+            } catch {}
+            throw new Error(err || ('HTTP ' + resp.status));
+          }
+          return await resp.json();
+        } catch (e) {
+          if (e && e.name === 'AbortError') {
+            throw new Error('request timeout');
+          }
+          throw e;
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      }
+
+      const [usersResult, weaponsResult, ammoResult, medicineResult] = await Promise.allSettled([
+        fetchJsonWithTimeout('/api/db/users?take=200', 0),
+        fetchJsonWithTimeout('/api/db/weapons?take=200', 10000),
+        fetchJsonWithTimeout('/api/db/items/catalog?itemType=ammo&take=300', 10000),
+        fetchJsonWithTimeout('/api/db/items/catalog?itemType=medicine&take=300', 10000)
       ]);
-      users = await usersResp.json();
-      weaponList = await weaponsResp.json();
-      ammoTypeList = await ammoResp.json();
-      medicineWeaponList = await medicineResp.json().catch(() => []);
+
+      if (usersResult.status !== 'fulfilled') {
+        const msg = usersResult.reason && usersResult.reason.message ? usersResult.reason.message : 'unknown error';
+        throw new Error('users request failed: ' + msg);
+      }
+
+      users = Array.isArray(usersResult.value) ? usersResult.value : [];
+      weaponList = weaponsResult.status === 'fulfilled' && Array.isArray(weaponsResult.value) ? weaponsResult.value : [];
+      ammoTypeList = ammoResult.status === 'fulfilled' && Array.isArray(ammoResult.value) ? ammoResult.value : [];
+      medicineWeaponList = medicineResult.status === 'fulfilled' && Array.isArray(medicineResult.value) ? medicineResult.value : [];
       renderUsers();
-      setStatus(`loaded ${users.length} users`);
+
+      const warnings = [];
+      if (weaponsResult.status !== 'fulfilled') warnings.push('weapons');
+      if (ammoResult.status !== 'fulfilled') warnings.push('ammo');
+      if (medicineResult.status !== 'fulfilled') warnings.push('medicine');
+      if (warnings.length > 0) {
+        setStatus(`loaded ${users.length} users (partial: ${warnings.join(', ')})`);
+      } else {
+        setStatus(`loaded ${users.length} users`);
+      }
     }
 
     userSearchEl.addEventListener('input', renderUsers);
     refreshBtnEl.addEventListener('click', () => {
       loadUsers().catch(err => {
         console.error(err);
-        setStatus('failed to load users');
+        const msg = err && err.message ? String(err.message) : 'unknown error';
+        setStatus('failed to load users: ' + msg);
       });
     });
 
     loadUsers().catch(err => {
       console.error(err);
-      setStatus('failed to load users');
+      const msg = err && err.message ? String(err.message) : 'unknown error';
+      setStatus('failed to load users: ' + msg);
     });
   </script>
 </body>

@@ -8,10 +8,12 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Hosting;
 
 var builder = WebApplication.CreateBuilder(args);
 // Large JSON backup uploads: nginx/Caddy must allow the same (e.g. client_max_body_size 200m;).
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = BattleDatabaseBackup.MaxBackupImportBodyBytes);
+builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(2));
 
 // ContentRoot часто /opt/battle/Server, а DMG в /opt/battle/wwwroot/downloads. Пустая Server/wwwroot/downloads не должна перехватывать запрос.
 static bool DownloadsHasDmg(string downloadsPath)
@@ -173,17 +175,17 @@ app.UseStaticFiles(new StaticFileOptions
     DefaultContentType = "application/octet-stream"
 });
 app.UseWebSockets();
-
-// Простейшее логирование всех запросов: метод, путь, статус и длительность.
 app.Use(async (ctx, next) =>
 {
     var sw = System.Diagnostics.Stopwatch.StartNew();
-    var method = ctx.Request.Method;
-    var path = ctx.Request.Path.ToString();
     await next();
     sw.Stop();
-    var status = ctx.Response.StatusCode;
-    Console.WriteLine($"[{DateTime.UtcNow:O}] {method} {path} -> {status} ({sw.ElapsedMilliseconds} ms)");
+
+    var logs = ctx.RequestServices.GetRequiredService<BattleLogStore>();
+    string method = ctx.Request.Method;
+    string path = ctx.Request.Path.ToString();
+    int status = ctx.Response.StatusCode;
+    logs.Append($"[http] {method} {path} -> {status} ({sw.ElapsedMilliseconds} ms)");
 });
 
 var jsonOpt = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -1057,7 +1059,7 @@ app.MapPost("/api/db/backup/import", async (HttpContext ctx, BattlePostgresDatab
     }
 });
 
-app.MapGet("/api/logs/recent", (BattleLogStore logs, int? take) =>
+app.MapGet("/api/logs/recent", (BattleServerLogDatabase logs, int? take) =>
 {
     int requested = take ?? 200;
     return Results.Json(logs.GetRecent(requested), jsonOpt);
