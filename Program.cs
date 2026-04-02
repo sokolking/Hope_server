@@ -1,6 +1,9 @@
 using BattleServer;
 using BattleServer.Models;
 using System.IO;
+using System.Diagnostics;
+using System.Threading;
+using System.Threading.Channels;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.StaticFiles;
 using Npgsql;
@@ -194,6 +197,7 @@ app.Use(async (ctx, next) =>
 
 var jsonOpt = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 jsonOpt.Converters.Add(new JsonStringEnumConverter());
+jsonOpt.Converters.Add(new BattleServer.Models.HexPositionDtoJsonConverter());
 
 // Клиент Unity: версия и ссылка на dmg в wwwroot/downloads (см. appsettings Client).
 app.MapGet("/api/client/version", (IConfiguration cfg) =>
@@ -226,6 +230,11 @@ var battleUserDb = app.Services.GetRequiredService<BattleUserDatabase>();
 var battleWeaponDb = app.Services.GetRequiredService<BattleWeaponDatabase>();
 var battleMedicineDb = app.Services.GetRequiredService<BattleMedicineDatabase>();
 
+// Один активный round-push: при спаме конца хода N Task.Run каждый делал Save+AppendTurn до broadcast и съедал пул Postgres,
+// пока CloseRound под store._lock ждал те же соединения в _userDb → submitAck зависал на WaitCloseChain / Apply.
+var roundResolvedPushGate = new SemaphoreSlim(1, 1);
+
+// WS: WaitBattleCloseChainAsync → Apply → submitAck → ScheduleSubmitTurnCloseRound (не блокировать ReceiveAsync).
 BattleRoom.RoundClosedForPush += room =>
 {
     if (room.LastTurnResult == null) return;
@@ -234,17 +243,18 @@ BattleRoom.RoundClosedForPush += room =>
     var nextRi = room.RoundIndex;
     var roundDeadlineUtcMs = room.RoundDeadlineUtcMs;
     var turnId = Guid.NewGuid().ToString("N");
-    battleTurnDb.Save(new BattleTurnRecordDto
-    {
-        TurnId = turnId,
-        BattleId = battleId,
-        TurnResult = turn
-    });
-    var battleRecord = battleHistoryDb.AppendTurn(battleId, turnId);
     _ = Task.Run(async () =>
     {
+        await roundResolvedPushGate.WaitAsync().ConfigureAwait(false);
         try
         {
+            battleTurnDb.Save(new BattleTurnRecordDto
+            {
+                TurnId = turnId,
+                BattleId = battleId,
+                TurnResult = turn
+            });
+            var battleRecord = battleHistoryDb.AppendTurn(battleId, turnId);
             var wsPayload = JsonSerializer.Serialize(new
             {
                 type = BattleWsProtocol.TypeRoundResolved,
@@ -254,26 +264,30 @@ BattleRoom.RoundClosedForPush += room =>
                 turnHistoryIds = battleRecord.TurnIds,
                 currentTurnPointer = battleRecord.TurnIds.Count - 1
             }, jsonOpt);
-            await BattleWebSocketRegistry.BroadcastTextAsync(battleId, wsPayload);
+            await BattleWebSocketRegistry.BroadcastTextAsync(battleId, wsPayload).ConfigureAwait(false);
             Console.WriteLine($"[tzInfo] Round push (ws): battleId={battleId}, resolvedRound={turn.RoundIndex}, nextRound={nextRi}");
+
+            if (turn.BattleFinished && turn.Results != null)
+            {
+                foreach (var r in turn.Results)
+                {
+                    if (r == null || r.UnitType != UnitType.Player || string.IsNullOrWhiteSpace(r.UnitId))
+                        continue;
+                    int rewardExp = string.Equals(r.UnitStatus, UnitStatuses.Dead, StringComparison.OrdinalIgnoreCase) ? 50 : 100;
+                    if (long.TryParse(r.UnitId, out long rewardUid))
+                        battleUserDb.TryAwardBattleExperience(rewardUid, rewardExp, out _);
+                }
+            }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[tzInfo] Round push error: {ex.Message}");
+            Console.WriteLine($"[tzInfo] Round post-close async error: {ex.Message}");
+        }
+        finally
+        {
+            roundResolvedPushGate.Release();
         }
     });
-
-    if (turn.BattleFinished && turn.Results != null)
-    {
-        foreach (var r in turn.Results)
-        {
-            if (r == null || r.UnitType != UnitType.Player || string.IsNullOrWhiteSpace(r.UnitId))
-                continue;
-            int rewardExp = string.Equals(r.UnitStatus, UnitStatuses.Dead, StringComparison.OrdinalIgnoreCase) ? 50 : 100;
-            if (long.TryParse(r.UnitId, out long rewardUid))
-                battleUserDb.TryAwardBattleExperience(rewardUid, rewardExp, out _);
-        }
-    }
 };
 
 // Фон: тик таймеров раундов раз в 0.2 сек
@@ -432,8 +446,200 @@ app.Map("/ws/battle", async (HttpContext ctx, BattleRoomStore store, BattleAuthS
     UserBattleSocketRegistry.Add(wsUserId, battleId, playerId, ws, connId);
     var buf = new byte[262144];
     var recvCount = 0;
+
+    // ── Channel-based decoupling ────────────────────────────────────────────────
+    // Receive loop writes raw text frames to the channel and immediately loops
+    // back to ReceiveAsync — it never blocks on business logic.
+    // Processor task reads from the channel and may await WaitBattleCloseChainAsync
+    // without preventing the socket from reading the next client message.
+    var msgChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(32)
+    {
+        FullMode = BoundedChannelFullMode.Wait,
+        SingleReader = true,
+        SingleWriter = true
+    });
+    Task? processorTask = null;
+
     try
     {
+        // Dedicated thread: battle processor must not compete with HTTP/DB on the thread pool — under load
+        // continuations were delayed tens of seconds between proc dequeue and submitAck (client timeout while ws Open).
+        processorTask = Task.Factory.StartNew(
+            async () =>
+        {
+            Console.WriteLine($"[BattleWS] proc START: connId={connId} battleId={battleId} spectator={spectatorWs} utc={DateTime.UtcNow:O}");
+            int procCount = 0;
+            try
+            {
+                await foreach (var procText in msgChannel.Reader.ReadAllAsync(ctx.RequestAborted))
+                {
+                    procCount++;
+                    var procMsgType = BattleWsProtocol.ReadMessageType(procText);
+                    Console.WriteLine($"[BattleWS] proc dequeue #{procCount}: connId={connId} type={procMsgType ?? "?"} bytes={procText.Length} utc={DateTime.UtcNow:O}");
+
+                    if (procMsgType == BattleWsProtocol.TypeSubmitTurn)
+                    {
+                        // Peek-log round index and action count for debugging.
+                        try
+                        {
+                            using var peekDoc = JsonDocument.Parse(procText);
+                            var pr = peekDoc.RootElement;
+                            int? peekRi = pr.TryGetProperty("roundIndex", out var re) && re.TryGetInt32(out var riv) ? riv : null;
+                            var peekPid = pr.TryGetProperty("playerId", out var pe) && pe.ValueKind == JsonValueKind.String ? pe.GetString() : null;
+                            var ac = 0;
+                            if (pr.TryGetProperty("actions", out var ar) && ar.ValueKind == JsonValueKind.Array)
+                                ac = ar.GetArrayLength();
+                            Console.WriteLine(
+                                $"[BattleWS] recv submitTurn peek: connId={connId}, playerId={peekPid ?? "?"}, roundIndex={peekRi?.ToString() ?? "?"}, actions={ac}");
+                        }
+                        catch (Exception peekEx)
+                        {
+                            Console.WriteLine($"[BattleWS] recv submitTurn peek parse failed: connId={connId}, err={peekEx.Message}");
+                        }
+
+                        if (spectatorWs)
+                        {
+                            Console.WriteLine($"[BattleWS] submitAck out: connId={connId}, battleId={battleId}, ok=false, error=spectator_readonly");
+                            await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeSubmitAck, ok = false, error = "spectator_readonly" }, jsonOpt, ctx.RequestAborted);
+                            Console.WriteLine($"[SubmitPath] TX submitAck SENT connId={connId} proc#{procCount} ok=false spectator");
+                            continue;
+                        }
+
+                        try
+                        {
+                            SubmitTurnPayloadDto? payload;
+                            try
+                            {
+                                Console.WriteLine($"[BattleWS] proc deserialize START proc#{procCount} bytes={procText.Length}");
+                                payload = JsonSerializer.Deserialize<SubmitTurnPayloadDto>(procText, jsonOpt);
+                                Console.WriteLine($"[BattleWS] proc deserialize END proc#{procCount} ok={(payload != null)}");
+                            }
+                            catch (Exception dex)
+                            {
+                                Console.WriteLine($"[BattleWS] proc deserialize FAIL proc#{procCount}: {dex.GetType().Name} {dex.Message}");
+                                payload = null;
+                            }
+                            if (payload == null)
+                            {
+                                Console.WriteLine($"[BattleWS] submitAck out: connId={connId}, battleId={battleId}, ok=false, error=invalid_submit_body");
+                                await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeSubmitAck, ok = false, error = "Invalid submitTurn body" }, jsonOpt, ctx.RequestAborted);
+                                Console.WriteLine($"[SubmitPath] TX submitAck SENT connId={connId} proc#{procCount} ok=false invalid_body");
+                                continue;
+                            }
+                            payload.BattleId = battleId;
+
+                            // ── Key fix: await close chain HERE in processor, not in receive loop ──
+                            // ReceiveAsync continues freely on the other task while we wait here.
+                            var chainSw = Stopwatch.StartNew();
+                            Console.WriteLine($"[BattleWS] proc wait-chain START connId={connId} battleId={battleId} proc#{procCount} utc={DateTime.UtcNow:O}");
+                            await store.WaitBattleCloseChainAsync(battleId).ConfigureAwait(false);
+                            chainSw.Stop();
+                            Console.WriteLine($"[BattleWS] proc wait-chain END connId={connId} battleId={battleId} proc#{procCount} elapsed={chainSw.ElapsedMilliseconds}ms");
+
+                            var submit = store.SubmitTurnApplyLocked(battleId, payload, out var mustCloseRoundAfterAck);
+                            Console.WriteLine(
+                                $"[SubmitPath] STORE connId={connId} proc#{procCount} playerId={payload.PlayerId} round={payload.RoundIndex} " +
+                                $"notFound={submit.NotFound} unknownPlayer={submit.UnknownPlayer} wrongRound={submit.WrongRound} expectedRound={submit.ExpectedRound} " +
+                                $"pendingClose={mustCloseRoundAfterAck}");
+                            if (submit.NotFound)
+                            {
+                                Console.WriteLine($"[BattleWS] submitAck out: connId={connId}, battleId={battleId}, ok=false, error=battle_not_found, playerId={payload.PlayerId}, roundIndex={payload.RoundIndex}");
+                                await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeSubmitAck, ok = false, error = "Battle not found" }, jsonOpt, ctx.RequestAborted);
+                                Console.WriteLine($"[SubmitPath] TX submitAck SENT connId={connId} proc#{procCount} ok=false battle_not_found");
+                            }
+                            else if (submit.UnknownPlayer)
+                            {
+                                Console.WriteLine($"[BattleWS] submitAck out: connId={connId}, battleId={battleId}, ok=false, error=unknown_player, playerId={payload.PlayerId}, roundIndex={payload.RoundIndex}");
+                                await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeSubmitAck, ok = false, error = "Unknown player" }, jsonOpt, ctx.RequestAborted);
+                                Console.WriteLine($"[SubmitPath] TX submitAck SENT connId={connId} proc#{procCount} ok=false unknown_player");
+                            }
+                            else if (submit.WrongRound)
+                            {
+                                Console.WriteLine(
+                                    $"[BattleWS] submitAck out: connId={connId}, battleId={battleId}, ok=false, error=wrong_round, expectedRound={submit.ExpectedRound}, payloadRound={payload.RoundIndex}, playerId={payload.PlayerId}");
+                                await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeSubmitAck, ok = false, error = "Wrong round", expectedRound = submit.ExpectedRound }, jsonOpt, ctx.RequestAborted);
+                                Console.WriteLine($"[SubmitPath] TX submitAck SENT connId={connId} proc#{procCount} ok=false wrong_round expected={submit.ExpectedRound}");
+                            }
+                            else
+                            {
+                                Console.WriteLine(
+                                    $"[BattleWS] submitAck out: connId={connId}, battleId={battleId}, ok=true, roundJustClosed={mustCloseRoundAfterAck}, playerId={payload.PlayerId}, roundIndex={payload.RoundIndex}");
+                                try
+                                {
+                                    await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeSubmitAck, ok = true }, jsonOpt, ctx.RequestAborted);
+                                    Console.WriteLine($"[SubmitPath] TX submitAck SENT connId={connId} proc#{procCount} ok=true pendingClose={mustCloseRoundAfterAck}");
+                                }
+                                finally
+                                {
+                                    if (mustCloseRoundAfterAck)
+                                        store.ScheduleSubmitTurnCloseRound(battleId);
+                                }
+                            }
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[BattleWS] submit error: connId={connId}, battleId={battleId}, playerId={playerId}, err={ex}");
+                            try
+                            {
+                                Console.WriteLine($"[BattleWS] submitAck out: connId={connId}, battleId={battleId}, ok=false, error=server_submit_exception");
+                                await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeSubmitAck, ok = false, error = "Server submit error" }, jsonOpt, ctx.RequestAborted);
+                                Console.WriteLine($"[SubmitPath] TX submitAck SENT connId={connId} proc#{procCount} ok=false server_exception");
+                            }
+                            catch
+                            {
+                                // socket could already be closed
+                            }
+                        }
+                    }
+                    else if (procMsgType == BattleWsProtocol.TypeLeave)
+                    {
+                        if (!spectatorWs)
+                        {
+                            string? leavePid = playerId;
+                            try
+                            {
+                                using var doc = JsonDocument.Parse(procText);
+                                if (doc.RootElement.TryGetProperty("playerId", out var pe) && pe.ValueKind == JsonValueKind.String)
+                                    leavePid = pe.GetString();
+                            }
+                            catch { /* use query playerId */ }
+                            if (!string.IsNullOrEmpty(leavePid))
+                                store.PlayerLeft(battleId, leavePid);
+                        }
+
+                        Console.WriteLine($"[BattleWS] leaveAck out: connId={connId}, battleId={battleId}, spectator={spectatorWs}");
+                        await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeLeaveAck, ok = true }, jsonOpt, ctx.RequestAborted);
+                        // Keep session spectator list in sync after explicit leave.
+                        var spectatorListJsonLeave = store.BuildSpectatorListJsonLocked();
+                        await UserSessionSocketRegistry.SendTextToUserAsync(wsUserId, spectatorListJsonLeave, ctx.RequestAborted).ConfigureAwait(false);
+                    }
+                    else if (!string.IsNullOrEmpty(procMsgType))
+                    {
+                        Console.WriteLine(
+                            $"[BattleWS] recv unhandled message type: connId={connId}, battleId={battleId}, type={procMsgType}, bytes={procText.Length}");
+                    }
+                    else
+                    {
+                        Console.WriteLine(
+                            $"[BattleWS] recv missing_or_unknown_type: connId={connId}, battleId={battleId}, bytes={procText.Length}");
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine($"[BattleWS] proc cancelled: connId={connId} battleId={battleId}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[BattleWS] proc error: connId={connId} battleId={battleId} err={ex.Message}");
+            }
+            Console.WriteLine($"[BattleWS] proc END: connId={connId} battleId={battleId} procCount={procCount} utc={DateTime.UtcNow:O}");
+        },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default).Unwrap();
+
         while (ws.State == WebSocketState.Open)
         {
             using var ms = new MemoryStream();
@@ -455,79 +661,14 @@ app.Map("/ws/battle", async (HttpContext ctx, BattleRoomStore store, BattleAuthS
             if (ms.Length == 0) continue;
             recvCount++;
             var text = Encoding.UTF8.GetString(ms.ToArray());
-            Console.WriteLine($"[BattleWS] recv text #{recvCount}: connId={connId}, bytes={text.Length}, utc={DateTime.UtcNow:O}");
-
             var msgType = BattleWsProtocol.ReadMessageType(text);
-            if (msgType == BattleWsProtocol.TypeSubmitTurn)
-            {
-                if (spectatorWs)
-                {
-                    await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeSubmitAck, ok = false, error = "spectator_readonly" }, jsonOpt, ctx.RequestAborted);
-                    continue;
-                }
-
-                try
-                {
-                    SubmitTurnPayloadDto? payload;
-                    try
-                    {
-                        payload = JsonSerializer.Deserialize<SubmitTurnPayloadDto>(text, jsonOpt);
-                    }
-                    catch
-                    {
-                        payload = null;
-                    }
-                    if (payload == null)
-                    {
-                        await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeSubmitAck, ok = false, error = "Invalid submitTurn body" }, jsonOpt, ctx.RequestAborted);
-                        continue;
-                    }
-                    payload.BattleId = battleId;
-
-                    var submit = store.SubmitTurnLocked(battleId, payload);
-                    if (submit.NotFound)
-                        await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeSubmitAck, ok = false, error = "Battle not found" }, jsonOpt, ctx.RequestAborted);
-                    else if (submit.UnknownPlayer)
-                        await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeSubmitAck, ok = false, error = "Unknown player" }, jsonOpt, ctx.RequestAborted);
-                    else if (submit.WrongRound)
-                        await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeSubmitAck, ok = false, error = "Wrong round", expectedRound = submit.ExpectedRound }, jsonOpt, ctx.RequestAborted);
-                    else
-                        await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeSubmitAck, ok = true }, jsonOpt, ctx.RequestAborted);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[BattleWS] submit error: connId={connId}, battleId={battleId}, playerId={playerId}, err={ex}");
-                    try
-                    {
-                        await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeSubmitAck, ok = false, error = "Server submit error" }, jsonOpt, ctx.RequestAborted);
-                    }
-                    catch
-                    {
-                        // socket could already be closed
-                    }
-                }
-            }
-            else if (msgType == BattleWsProtocol.TypeLeave)
-            {
-                if (!spectatorWs)
-                {
-                    string? leavePid = playerId;
-                    try
-                    {
-                        using var doc = JsonDocument.Parse(text);
-                        if (doc.RootElement.TryGetProperty("playerId", out var pe) && pe.ValueKind == JsonValueKind.String)
-                            leavePid = pe.GetString();
-                    }
-                    catch { /* use query playerId */ }
-                    if (!string.IsNullOrEmpty(leavePid))
-                        store.PlayerLeft(battleId, leavePid);
-                }
-
-                await BattleWsProtocol.SendJsonAsync(ws, new { type = BattleWsProtocol.TypeLeaveAck, ok = true }, jsonOpt, ctx.RequestAborted);
-                // Keep session spectator list in sync after explicit leave.
-                var spectatorListJson = store.BuildSpectatorListJsonLocked();
-                await UserSessionSocketRegistry.SendTextToUserAsync(wsUserId, spectatorListJson, ctx.RequestAborted).ConfigureAwait(false);
-            }
+            var backlogBefore = msgChannel.Reader.Count;
+            // One WriteLine: every Append used to sync-hit Postgres on this thread before we fixed persist; still avoid triple logging on hot path.
+            Console.WriteLine(
+                $"[BattleWS] recv text #{recvCount}: connId={connId}, type={msgType ?? "?"}, bytes={text.Length}, utc={DateTime.UtcNow:O} · " +
+                $"[SubmitPath] RX recv#{recvCount} type={msgType ?? "?"} · chan write backlog={backlogBefore}");
+            await msgChannel.Writer.WriteAsync(text, ctx.RequestAborted);
+            // Loop immediately back to ReceiveAsync — never blocks on business logic.
         }
     disconnect:;
     }
@@ -541,6 +682,14 @@ app.Map("/ws/battle", async (HttpContext ctx, BattleRoomStore store, BattleAuthS
     }
     finally
     {
+        // Signal processor that no more messages will arrive, then drain it.
+        msgChannel.Writer.TryComplete();
+        if (processorTask != null)
+        {
+            try { await processorTask.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { Console.WriteLine($"[BattleWS] processorTask final error: connId={connId}, {ex.Message}"); }
+        }
         UserBattleSocketRegistry.Remove(wsUserId, ws);
         // Disconnect/scene close must not end battle room; explicit leave handles surrender semantics.
         if (!spectatorWs
@@ -553,6 +702,7 @@ app.Map("/ws/battle", async (HttpContext ctx, BattleRoomStore store, BattleAuthS
         var spectatorListJson = store.BuildSpectatorListJsonLocked();
         await UserSessionSocketRegistry.SendTextToUserAsync(wsUserId, spectatorListJson, CancellationToken.None).ConfigureAwait(false);
         Console.WriteLine($"[BattleWS] disconnect: connId={connId}, battleId={battleId}, playerId={playerId}, recvMsgs={recvCount}, utc={DateTime.UtcNow:O}");
+        Console.WriteLine($"[SubmitPath] WS_CLOSED connId={connId} battleId={battleId} playerId={playerId} recvMsgs={recvCount}");
         BattleWebSocketRegistry.Remove(battleId, ws, connId);
     }
 });

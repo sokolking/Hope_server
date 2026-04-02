@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Threading.Tasks;
 using BattleServer.Models;
 
 namespace BattleServer;
@@ -19,6 +22,16 @@ public partial class BattleRoomStore
     private string? _waitingBattleId;
 
     private readonly Dictionary<string, BattleRoom> _rooms = new();
+
+    /// <summary>
+    /// WebSocket обрабатывает сообщения последовательно: синхронный CloseRound после submitAck блокировал следующий ReceiveAsync,
+    /// пока клиент уже получил roundResolved из фона — следующий submitTurn не читался. CloseRound ставим в очередь TP;
+    /// перед Apply ждём хвост цепочки, чтобы не применить ход до закрытия предыдущего раунда.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, object> _battleCloseChainLocks = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Task> _battleCloseTailTasks = new(StringComparer.Ordinal);
+    /// <summary>Количество незавершённых CloseRound задач в цепочке для каждого боя (только для логирования).</summary>
+    private readonly ConcurrentDictionary<string, int> _battleCloseChainDepth = new(StringComparer.Ordinal);
 
     public BattleRoomStore(BattleHistoryDatabase battleHistoryDb, BattleTurnDatabase battleTurnDb, BattleWeaponDatabase weaponDb, BattleMedicineDatabase medicineDb, BattleObstacleBalanceDatabase obstacleDb, BattleZoneShrinkDatabase zoneShrinkDb, BattleBodyPartDatabase bodyPartDb, BattleUserDatabase userDb, BattleMapSettingsDatabase mapSettings)
     {
@@ -235,24 +248,137 @@ public partial class BattleRoomStore
         return false;
     }
 
-    /// <summary>Submit под общей блокировкой с Tick — исключает гонку «таймер закрыл раунд / второй сабмит».</summary>
-    public SubmitTurnResult SubmitTurnLocked(string battleId, SubmitTurnPayloadDto payload)
+    /// <summary>
+    /// Записать ход под lock (коротко). Если <paramref name="mustCloseRoundAfterAck"/> true, вызовите
+    /// <see cref="SubmitTurnCloseRoundLocked"/> после отправки клиенту submitAck — иначе CloseRound держит lock
+    /// на время всей симуляции и клиент ловит таймаут.
+    /// </summary>
+    public SubmitTurnResult SubmitTurnApplyLocked(string battleId, SubmitTurnPayloadDto payload, out bool mustCloseRoundAfterAck)
     {
+        mustCloseRoundAfterAck = false;
         lock (_lock)
         {
             if (!_rooms.TryGetValue(battleId, out var room))
+            {
+                Console.WriteLine($"[BattleStore] SubmitTurnApplyLocked reject: reason=not_found battleId={battleId}");
                 return SubmitTurnResult.NotFoundRoom();
+            }
+
             if (string.IsNullOrEmpty(payload.PlayerId) || !room.Players.ContainsKey(payload.PlayerId))
+            {
+                Console.WriteLine(
+                    $"[BattleStore] SubmitTurnApplyLocked reject: reason=bad_player battleId={battleId} playerId={payload.PlayerId ?? "(null)"}");
                 return SubmitTurnResult.BadPlayer();
+            }
+
             if (payload.RoundIndex != room.RoundIndex)
+            {
+                Console.WriteLine(
+                    $"[BattleStore] SubmitTurnApplyLocked reject: reason=round_mismatch battleId={battleId} playerId={payload.PlayerId} clientRound={payload.RoundIndex} serverRound={room.RoundIndex}");
                 return SubmitTurnResult.RoundMismatch(room.RoundIndex);
+            }
+
             bool shouldClose = room.SubmitTurn(payload);
             Console.WriteLine($"[tzInfo] SubmitTurn: battleId={battleId}, playerId={payload.PlayerId}, round={payload.RoundIndex}, actionCount={(payload.Actions?.Length ?? 0)}, shouldClose={shouldClose}");
             if (!shouldClose)
                 return SubmitTurnResult.Accepted(false);
-            room.CloseRound(fromTimer: false);
-            return SubmitTurnResult.Accepted(true);
+
+            mustCloseRoundAfterAck = true;
+            return SubmitTurnResult.Accepted(false);
         }
+    }
+
+    /// <summary>Закрыть раунд после submitAck (см. <see cref="SubmitTurnApplyLocked"/>). Идемпотентно, если таймер уже закрыл раунд.</summary>
+    public void SubmitTurnCloseRoundLocked(string battleId)
+    {
+        lock (_lock)
+        {
+            if (!_rooms.TryGetValue(battleId, out var room))
+                return;
+            if (room.Players.Count == 0)
+                return;
+            if (room.Submissions.Count < room.Players.Count)
+                return;
+            var sw = Stopwatch.StartNew();
+            Console.WriteLine($"[BattleStore] SubmitTurnCloseRoundLocked START: battleId={battleId} round={room.RoundIndex} utc={DateTime.UtcNow:O}");
+            room.CloseRound(fromTimer: false);
+            sw.Stop();
+            Console.WriteLine($"[BattleStore] SubmitTurnCloseRoundLocked END: battleId={battleId} elapsed={sw.ElapsedMilliseconds}ms");
+        }
+    }
+
+    /// <summary>Дождаться фоновых CloseRound, запланированных с WebSocket (иначе Apply может обогнать чужой Close).</summary>
+    public Task WaitBattleCloseChainAsync(string battleId)
+    {
+        if (string.IsNullOrEmpty(battleId))
+            return Task.CompletedTask;
+        var sync = _battleCloseChainLocks.GetOrAdd(battleId, _ => new object());
+        Task t;
+        bool found;
+        lock (sync)
+        {
+            found = _battleCloseTailTasks.TryGetValue(battleId, out t!);
+        }
+
+        // Never log under lock(sync): Console can block on BattleLogConsoleWriter and invert with another thread holding the writer while waiting on sync.
+        if (!found)
+        {
+            Console.WriteLine($"[BattleStore] WaitCloseChain: battleId={battleId} noChain (already done)");
+            return Task.CompletedTask;
+        }
+
+        bool isPending = !t.IsCompleted;
+        Console.WriteLine($"[BattleStore] WaitCloseChain: battleId={battleId} tailStatus={t.Status} isPending={isPending} depth={_battleCloseChainDepth.GetValueOrDefault(battleId)}");
+        return t;
+    }
+
+    /// <summary>Закрыть раунд в фоне; не блокировать ReceiveAsync следующего submitTurn.</summary>
+    public void ScheduleSubmitTurnCloseRound(string battleId)
+    {
+        if (string.IsNullOrEmpty(battleId))
+            return;
+        var sync = _battleCloseChainLocks.GetOrAdd(battleId, _ => new object());
+        int depth;
+        lock (sync)
+        {
+            var prev = _battleCloseTailTasks.TryGetValue(battleId, out var p) ? p : Task.CompletedTask;
+            depth = _battleCloseChainDepth.AddOrUpdate(battleId, 1, (_, old) => old + 1);
+            var next = prev.ContinueWith(_ =>
+                {
+                    try
+                    {
+                        Console.WriteLine($"[BattleStore] CloseRoundTask START: battleId={battleId} utc={DateTime.UtcNow:O}");
+                        var sw = Stopwatch.StartNew();
+                        SubmitTurnCloseRoundLocked(battleId);
+                        sw.Stop();
+                        Console.WriteLine($"[BattleStore] CloseRoundTask END: battleId={battleId} elapsed={sw.ElapsedMilliseconds}ms");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[BattleStore] ScheduleSubmitTurnCloseRound failed battleId={battleId}, err={ex}");
+                    }
+                    finally
+                    {
+                        _battleCloseChainDepth.AddOrUpdate(battleId, 0, (_, old) => Math.Max(0, old - 1));
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.RunContinuationsAsynchronously,
+                TaskScheduler.Default);
+            _battleCloseTailTasks[battleId] = next;
+        }
+
+        Console.WriteLine($"[BattleStore] ScheduleCloseRound: battleId={battleId} chainDepth={depth} utc={DateTime.UtcNow:O}");
+    }
+
+    /// <summary>Атомарный submit+close (без раннего ack). Для WebSocket используйте Wait + Apply + ack + Schedule.</summary>
+    public SubmitTurnResult SubmitTurnLocked(string battleId, SubmitTurnPayloadDto payload)
+    {
+        WaitBattleCloseChainAsync(battleId).GetAwaiter().GetResult();
+        var r = SubmitTurnApplyLocked(battleId, payload, out var mustClose);
+        if (mustClose)
+            SubmitTurnCloseRoundLocked(battleId);
+        return mustClose ? SubmitTurnResult.Accepted(true) : r;
     }
 
     /// <summary>Игрок покинул клиент: отмена ожидания в очереди или завершение боя (таймер не тикает для удалённой комнаты).</summary>

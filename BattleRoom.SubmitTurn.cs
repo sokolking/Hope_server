@@ -9,9 +9,26 @@ public partial class BattleRoom
     /// <summary>Принять ход. Возвращает true, если все участники сдали ход и раунд нужно закрыть.</summary>
     public bool SubmitTurn(SubmitTurnPayloadDto payload)
     {
-        if (payload.RoundIndex != RoundIndex) return false;
-        if (!Players.ContainsKey(payload.PlayerId)) return false;
-        if (Submissions.ContainsKey(payload.PlayerId)) return false; // дубликат — не закрывать раунд
+        if (payload.RoundIndex != RoundIndex)
+        {
+            Console.WriteLine(
+                $"[BattleRoom] SubmitTurn rejected: reason=round_mismatch battleId={BattleId} playerId={payload.PlayerId} clientRound={payload.RoundIndex} serverRound={RoundIndex}");
+            return false;
+        }
+
+        if (!Players.ContainsKey(payload.PlayerId))
+        {
+            Console.WriteLine(
+                $"[BattleRoom] SubmitTurn rejected: reason=unknown_player battleId={BattleId} playerId={payload.PlayerId}");
+            return false;
+        }
+
+        if (Submissions.ContainsKey(payload.PlayerId))
+        {
+            Console.WriteLine(
+                $"[BattleRoom] SubmitTurn rejected: reason=duplicate_submit battleId={BattleId} playerId={payload.PlayerId} round={RoundIndex} submissions={Submissions.Count}/{Players.Count}");
+            return false;
+        }
 
         // Сформировать команду юнита для новой серверной модели.
         if (!PlayerToUnitId.TryGetValue(payload.PlayerId, out var unitId) || string.IsNullOrEmpty(unitId))
@@ -72,6 +89,8 @@ public partial class BattleRoom
 
         // Все игроки прислали ходы?
         bool allPlayersSubmitted = Submissions.Count >= Players.Count;
+        Console.WriteLine(
+            $"[BattleRoom] SubmitTurn accepted: battleId={BattleId} playerId={payload.PlayerId} round={RoundIndex} actionCount={(payload.Actions?.Length ?? 0)} submissionsNow={Submissions.Count}/{Players.Count} allSubmitted={allPlayersSubmitted}");
 
         return allPlayersSubmitted;
     }

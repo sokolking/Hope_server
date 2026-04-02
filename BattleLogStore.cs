@@ -1,22 +1,59 @@
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
+using System.Threading.Tasks;
 
 namespace BattleServer;
 
 public sealed class BattleLogStore
 {
     private const int MaxEntries = 2000;
+    /// <summary>Cap DB persist queue: unbounded Task.Run per line exhausted Npgsql pool and thread pool under log bursts (whole process appeared hung).</summary>
+    private const int PersistQueueCapacity = 16384;
     private readonly object _lock = new();
     private readonly List<BattleLogEntry> _entries = new();
     private readonly ConcurrentDictionary<Guid, Channel<BattleLogEntry>> _subscribers = new();
     private readonly Action<BattleLogEntry>? _persistEntry;
+    private readonly Channel<BattleLogEntry>? _persistChannel;
     private long _nextId;
 
     public BattleLogStore(Action<BattleLogEntry>? persistEntry = null)
     {
         _persistEntry = persistEntry;
+        if (persistEntry == null)
+            return;
+
+        _persistChannel = Channel.CreateBounded<BattleLogEntry>(new BoundedChannelOptions(PersistQueueCapacity)
+        {
+            FullMode = BoundedChannelFullMode.DropWrite,
+            SingleReader = true,
+            SingleWriter = false
+        });
+        _ = Task.Run(() => RunPersistWorkerAsync(_persistChannel.Reader, persistEntry));
+    }
+
+    private static async Task RunPersistWorkerAsync(ChannelReader<BattleLogEntry> reader, Action<BattleLogEntry> persist)
+    {
+        try
+        {
+            await foreach (var entry in reader.ReadAllAsync())
+            {
+                try
+                {
+                    persist(entry);
+                }
+                catch
+                {
+                    // Never break persist loop due to one bad row.
+                }
+            }
+        }
+        catch
+        {
+            // Reader completed or host shutting down.
+        }
     }
 
     public BattleLogEntry Append(string rawMessage, bool isError = false)
@@ -36,14 +73,9 @@ public sealed class BattleLogStore
         foreach (var channel in subscribers)
             channel.Writer.TryWrite(entry);
 
-        try
-        {
-            _persistEntry?.Invoke(entry);
-        }
-        catch
-        {
-            // Never break runtime logging flow due to persistence failures.
-        }
+        // One sequential worker + bounded queue: never spawn unbounded Task.Run → OpenConnection storms.
+        if (_persistChannel != null)
+            _persistChannel.Writer.TryWrite(entry);
 
         return entry;
     }
@@ -178,18 +210,20 @@ public sealed class BattleLogConsoleWriter : TextWriter
 
     public override void Write(char value)
     {
+        string? toPersist = null;
         lock (_sync)
         {
             _inner.Write(value);
             if (value == '\n')
             {
-                FlushBuffer();
-                return;
+                toPersist = TakeBufferForPersist();
             }
-
-            if (value != '\r')
+            else if (value != '\r')
                 _buffer.Append(value);
         }
+
+        if (toPersist != null)
+            _store.Append(toPersist, _isError);
     }
 
     public override void Write(string? value)
@@ -197,45 +231,69 @@ public sealed class BattleLogConsoleWriter : TextWriter
         if (value == null)
             return;
 
+        List<string>? pending = null;
         lock (_sync)
         {
             _inner.Write(value);
             foreach (char ch in value)
             {
                 if (ch == '\n')
-                    FlushBuffer();
+                {
+                    var line = TakeBufferForPersist();
+                    if (line != null)
+                    {
+                        pending ??= new List<string>();
+                        pending.Add(line);
+                    }
+                }
                 else if (ch != '\r')
                     _buffer.Append(ch);
             }
+        }
+
+        if (pending != null)
+        {
+            foreach (var line in pending)
+                _store.Append(line, _isError);
         }
     }
 
     public override void WriteLine(string? value)
     {
+        string? toPersist;
         lock (_sync)
         {
             _inner.WriteLine(value);
             if (!string.IsNullOrEmpty(value))
                 _buffer.Append(value);
-            FlushBuffer();
+            toPersist = TakeBufferForPersist();
         }
+
+        if (toPersist != null)
+            _store.Append(toPersist, _isError);
     }
 
     public override void Flush()
     {
+        string? toPersist = null;
         lock (_sync)
         {
             _inner.Flush();
             if (_buffer.Length > 0)
-                FlushBuffer();
+                toPersist = TakeBufferForPersist();
         }
+
+        if (toPersist != null)
+            _store.Append(toPersist, _isError);
     }
 
-    private void FlushBuffer()
+    /// <summary>Must run under <see cref="_sync"/>. Returns one logical line for persist, or null if empty.</summary>
+    private string? TakeBufferForPersist()
     {
         string text = _buffer.ToString();
         _buffer.Clear();
-        if (!string.IsNullOrWhiteSpace(text))
-            _store.Append(text, _isError);
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+        return text;
     }
 }

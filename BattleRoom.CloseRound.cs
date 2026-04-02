@@ -247,8 +247,8 @@ public partial class BattleRoom
                         ActionType = actionType,
                         Tick = tick,
                         ActionStatus = BattleExecutedActionStatuses.Failure,
-                        FromHex = new HexPositionDto { Col = currentPos.col, Row = currentPos.row }.Hex,
-                        ToHex = new HexPositionDto { Col = currentPos.col, Row = currentPos.row }.Hex,
+                        FromHex = new HexPositionDto { Col = currentPos.col, Row = currentPos.row }.ToWireHex(),
+                        ToHex = new HexPositionDto { Col = currentPos.col, Row = currentPos.row }.ToWireHex(),
                         TargetUnitId = action.TargetUnitId,
                         BodyPart = NormalizeBodyPartId(action.BodyPart),
                         Posture = currentPosture
@@ -292,7 +292,7 @@ public partial class BattleRoom
                                 executed.Posture = replayMovePosture;
                                 lastMovePostureByUnit[uid] = replayMovePosture;
                                 executed.ActionStatus = BattleExecutedActionStatuses.Succeeded;
-                                executed.ToHex = new HexPositionDto { Col = targetCell.Item1, Row = targetCell.Item2 }.Hex;
+                                executed.ToHex = new HexPositionDto { Col = targetCell.Item1, Row = targetCell.Item2 }.ToWireHex();
 
                                 if (string.Equals(currentPosture, BattlePostures.Run, StringComparison.OrdinalIgnoreCase))
                                 {
@@ -338,7 +338,7 @@ public partial class BattleRoom
                                 }
                                 else
                                 {
-                                    executed.ToHex = new HexPositionDto { Col = ac, Row = ar }.Hex;
+                                    executed.ToHex = new HexPositionDto { Col = ac, Row = ar }.ToWireHex();
                                     int dist = HexSpawn.HexDistance(currentPos.col, currentPos.row, ac, ar);
                                     int weaponRange = Math.Max(0, unit.WeaponRange);
                                     int rawDamage = RollWeaponDamageInclusive(unit);
@@ -439,7 +439,7 @@ public partial class BattleRoom
                                             else
                                             {
                                                 executed.TargetUnitId = hexHitId;
-                                                executed.ToHex = new HexPositionDto { Col = hexHitPos.col, Row = hexHitPos.row }.Hex;
+                                                executed.ToHex = new HexPositionDto { Col = hexHitPos.col, Row = hexHitPos.row }.ToWireHex();
 
                                                 _coverLineBuffer.Clear();
                                                 _coverLineBuffer.AddRange(_hexLineBuffer);
@@ -528,7 +528,7 @@ public partial class BattleRoom
                         }
                         else
                         {
-                            executed.ToHex = new HexPositionDto { Col = targetPos.col, Row = targetPos.row }.Hex;
+                            executed.ToHex = new HexPositionDto { Col = targetPos.col, Row = targetPos.row }.ToWireHex();
                             int dist = HexSpawn.HexDistance(currentPos.col, currentPos.row, targetPos.col, targetPos.row);
                             int weaponRange = Math.Max(0, unit.WeaponRange);
                             string weaponCategory = GetWeaponCategoryFromDbByItemId(unit.WeaponItemId);
@@ -594,7 +594,7 @@ public partial class BattleRoom
                                             resolvedTargetId = oid;
                                             targetUnit = ou;
                                             targetPos = positions[oid];
-                                            executed.ToHex = new HexPositionDto { Col = targetPos.col, Row = targetPos.row }.Hex;
+                                            executed.ToHex = new HexPositionDto { Col = targetPos.col, Row = targetPos.row }.ToWireHex();
                                             dist = HexSpawn.HexDistance(currentPos.col, currentPos.row, targetPos.col, targetPos.row);
                                             HexSpawn.GetHexLineBetweenExclusive(currentPos.col, currentPos.row, targetPos.col, targetPos.row, _hexLineBuffer);
                                             losRedirected = true;
