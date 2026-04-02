@@ -18,6 +18,10 @@ public partial class BattleRoom
     private const float MaxPenaltyFraction = 0.95f;
 
     public string BattleId { get; }
+    /// <summary>Ширина поля (колонки 0..MapWidth-1). Hex-тег: буква = col.</summary>
+    public int MapWidth { get; }
+    /// <summary>Высота поля (строки 0..MapHeight-1). Hex-тег: число = row.</summary>
+    public int MapHeight { get; }
     public const float RoundDuration = 100f;
     public const int MaxAp = 100;
     public const int MobMaxAp = 15;
@@ -173,16 +177,16 @@ public partial class BattleRoom
     /// <summary>Клетка в пределах полной сетки и активной боевой зоны (после сужения).</summary>
     public bool IsInActiveZone(int col, int row) =>
         col >= 0 && row >= 0
-        && col < HexSpawn.DefaultGridWidth && row < HexSpawn.DefaultGridLength
+        && col < MapWidth && row < MapHeight
         && col >= _activeMinCol && col <= _activeMaxCol
         && row >= _activeMinRow && row <= _activeMaxRow;
 
+    /// <summary>Wire hex: одна буква A–Z = col, число = row (как <see cref="HexPositionDto"/> и клиент).</summary>
     internal static string HexTagFromColRow(int col, int row)
     {
-        int normalizedRow = Math.Clamp(row, 0, 25);
-        char rowLetter = (char)('A' + normalizedRow);
-        int normalizedCol = Math.Clamp(col, 0, 99);
-        return $"{rowLetter}{normalizedCol}";
+        int safeCol = Math.Clamp(col, 0, 25);
+        int safeRow = Math.Clamp(row, 0, 99);
+        return $"{(char)('A' + safeCol)}{safeRow}";
     }
 
     internal ActiveZoneDto BuildActiveZoneDto() => new()
@@ -193,9 +197,11 @@ public partial class BattleRoom
         BottomRightHex = HexTagFromColRow(_activeMaxCol, _activeMaxRow)
     };
 
-    public BattleRoom(string battleId, BattleWeaponDatabase? weaponDb = null, BattleObstacleBalanceDatabase? obstacleDb = null, BattleBodyPartDatabase? bodyPartDb = null, BattleUserDatabase? userDb = null, BattleZoneShrinkDatabase? zoneShrinkDb = null, BattleMedicineDatabase? medicineDb = null)
+    public BattleRoom(string battleId, int mapWidth, int mapHeight, BattleWeaponDatabase? weaponDb = null, BattleObstacleBalanceDatabase? obstacleDb = null, BattleBodyPartDatabase? bodyPartDb = null, BattleUserDatabase? userDb = null, BattleZoneShrinkDatabase? zoneShrinkDb = null, BattleMedicineDatabase? medicineDb = null)
     {
         BattleId = battleId;
+        MapWidth = Math.Clamp(mapWidth, 1, BattleMapSettingsDatabase.MaxMapWidth);
+        MapHeight = Math.Clamp(mapHeight, 1, BattleMapSettingsDatabase.MaxMapHeight);
         _rng = new Random(Guid.NewGuid().GetHashCode());
         _weaponDb = weaponDb;
         _medicineDb = medicineDb;

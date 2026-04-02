@@ -71,8 +71,8 @@ public partial class BattleRoom
                 if (!HexSpawn.TryFindHexAtExactDistance(
                         p1Pos.col,
                         p1Pos.row,
-                        HexSpawn.DefaultGridWidth,
-                        HexSpawn.DefaultGridLength,
+                        MapWidth,
+                        MapHeight,
                         DebugSoloMobHexDistanceFromPlayer,
                         out mobCol,
                         out mobRow))
@@ -80,8 +80,8 @@ public partial class BattleRoom
                     (mobCol, mobRow) = HexSpawn.FindOpponentSpawn(
                         p1Pos.col,
                         p1Pos.row,
-                        HexSpawn.DefaultGridWidth,
-                        HexSpawn.DefaultGridLength,
+                        MapWidth,
+                        MapHeight,
                         HexSpawn.MinSpawnHexDistance);
                 }
             }
@@ -90,8 +90,8 @@ public partial class BattleRoom
                 (mobCol, mobRow) = HexSpawn.FindOpponentSpawn(
                     p1Pos.col,
                     p1Pos.row,
-                    HexSpawn.DefaultGridWidth,
-                    HexSpawn.DefaultGridLength,
+                    MapWidth,
+                    MapHeight,
                     HexSpawn.MinSpawnHexDistance);
             }
 

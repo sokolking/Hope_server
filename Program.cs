@@ -136,7 +136,10 @@ builder.Services.AddSingleton(sp => new BattleUserDatabase(
     sp.GetRequiredService<BattleWeaponDatabase>(),
     sp.GetRequiredService<BattleMedicineDatabase>()));
 builder.Services.AddSingleton<BattleObstacleBalanceDatabase>();
-builder.Services.AddSingleton<BattleZoneShrinkDatabase>();
+builder.Services.AddSingleton<BattleMapSettingsDatabase>();
+builder.Services.AddSingleton(sp => new BattleZoneShrinkDatabase(
+    sp.GetRequiredService<BattlePostgresDatabase>(),
+    sp.GetRequiredService<BattleMapSettingsDatabase>()));
 builder.Services.AddSingleton<BattleBodyPartDatabase>();
 builder.Services.AddSingleton<BattleRoomStore>(sp => new BattleRoomStore(
     sp.GetRequiredService<BattleHistoryDatabase>(),
@@ -146,7 +149,8 @@ builder.Services.AddSingleton<BattleRoomStore>(sp => new BattleRoomStore(
     sp.GetRequiredService<BattleObstacleBalanceDatabase>(),
     sp.GetRequiredService<BattleZoneShrinkDatabase>(),
     sp.GetRequiredService<BattleBodyPartDatabase>(),
-    sp.GetRequiredService<BattleUserDatabase>()));
+    sp.GetRequiredService<BattleUserDatabase>(),
+    sp.GetRequiredService<BattleMapSettingsDatabase>()));
 builder.Services.AddSingleton(sp => new BattleAuthSession(
     sp.GetRequiredService<IConfiguration>(),
     sp.GetRequiredService<BattleUserDatabase>()));
@@ -210,6 +214,7 @@ app.MapGet("/api/client/version", (IConfiguration cfg) =>
 
 var postgresDb = app.Services.GetRequiredService<BattlePostgresDatabase>();
 postgresDb.EnsureCreated();
+app.Services.GetRequiredService<BattleMapSettingsDatabase>().EnsureSchema();
 app.Services.GetRequiredService<BattleServerLogDatabase>().EnsureCreated();
 var logStore = app.Services.GetRequiredService<BattleLogStore>();
 Console.SetOut(new BattleLogConsoleWriter(Console.Out, logStore, isError: false));
@@ -699,6 +704,8 @@ app.MapGet("/api/battle/{battleId}", (HttpContext http, string battleId, BattleR
     room.FillSpawnArrays(out var spawnIds, out var spawnCols, out var spawnRows, out var spawnCurrentAps, out var spawnMaxAps, out var spawnMaxHps, out var spawnCurrentHps, out var spawnCurrentPostures, out var spawnWeaponItemIds, out var spawnWeaponCategories, out var spawnWeaponDamageMins, out var spawnWeaponDamages, out var spawnWeaponRanges, out var spawnWeaponAttackApCosts, out var spawnCurrentMagazineRounds, out var spawnWeaponTightnesses, out var spawnWeaponTrajectoryHeights, out var spawnWeaponIsSnipers, out var spawnDisplayNames, out var spawnLevels, out var spawnTeamIds, out var spawnStrengths, out var spawnAgilities, out var spawnIntuitions, out var spawnEndurances, out var spawnAccuracies, out var spawnIntellects);
     var response = new BattleStateResponse
     {
+        MapWidth = room.MapWidth,
+        MapHeight = room.MapHeight,
         RoundIndex = room.RoundIndex,
         RoundDuration = BattleRoom.RoundDuration,
         RoundTimeLeft = room.RoundTimeLeft,
@@ -1002,6 +1009,16 @@ app.MapPut("/api/db/zone-shrink", (BattleZoneShrinkDatabase db, BattleZoneShrink
     return Results.Ok(new { ok = true });
 });
 
+app.MapGet("/api/db/battle-map-settings", (BattleMapSettingsDatabase db) =>
+    Results.Json(db.GetSettings(), jsonOpt));
+app.MapPut("/api/db/battle-map-settings", (BattleMapSettingsDatabase db, BattleMapSettingsDto? body) =>
+{
+    if (body == null)
+        return Results.Json(new { error = "body required" }, jsonOpt, statusCode: 400);
+    db.UpsertSettings(body);
+    return Results.Ok(new { ok = true });
+});
+
 app.MapGet("/api/db/backup/export", async (BattlePostgresDatabase db, IConfiguration cfg, HttpRequest req) =>
 {
     if (!BattleDatabaseBackup.BackupAuthorizationOk(cfg, req))
@@ -1222,6 +1239,8 @@ public class JoinRequest
 
 public class BattleStateResponse
 {
+    public int MapWidth { get; set; }
+    public int MapHeight { get; set; }
     public int RoundIndex { get; set; }
     public float RoundDuration { get; set; }
     public float RoundTimeLeft { get; set; }

@@ -20,8 +20,8 @@ public partial class BattleRoom
     {
         if (string.IsNullOrWhiteSpace(playerId) || !Players.ContainsKey(playerId))
             return;
-        col = Math.Clamp(col, 0, HexSpawn.DefaultGridWidth - 1);
-        row = Math.Clamp(row, 0, HexSpawn.DefaultGridLength - 1);
+        col = Math.Clamp(col, 0, MapWidth - 1);
+        row = Math.Clamp(row, 0, MapHeight - 1);
         Players[playerId] = (col, row);
         if (PlayerToUnitId.TryGetValue(playerId, out var unitId) &&
             Units.TryGetValue(unitId, out var unit))

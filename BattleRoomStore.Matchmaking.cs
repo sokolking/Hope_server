@@ -226,6 +226,7 @@ public partial class BattleRoomStore
 
     private List<(IReadOnlyList<long> targets, string json)> CompleteReadyCheckAndStartBattleLocked(MatchQueueMode mode, ReadyCheckState ready)
     {
+        var (gw, gh) = _mapSettings.GetMapDimensions();
         int team0Count = mode == MatchQueueMode.PvpRandom
             ? Math.Max(1, (ready.UserIds.Count + 1) / 2)
             : mode.PlayersPerTeam();
@@ -236,7 +237,7 @@ public partial class BattleRoomStore
         if (mode == MatchQueueMode.PvpRandom)
         {
             // Random mode: keep teams on different spawn lines (left vs right areas).
-            var splitSpawns = HexSpawn.FindTwoTeamSpawns(team0Count, HexSpawn.DefaultGridWidth, HexSpawn.DefaultGridLength, HexSpawn.MinSpawnHexDistance);
+            var splitSpawns = HexSpawn.FindTwoTeamSpawns(team0Count, gw, gh, HexSpawn.MinSpawnHexDistance);
             spawns = new List<(int col, int row)>(ready.UserIds.Count);
             for (int i = 0; i < team0Count; i++)
                 spawns.Add(splitSpawns[i]);
@@ -246,7 +247,7 @@ public partial class BattleRoomStore
         else
         {
             int perTeam = mode.PlayersPerTeam();
-            spawns = HexSpawn.FindTwoTeamSpawnsOnOppositeHorizontalSides(perTeam, HexSpawn.DefaultGridWidth, HexSpawn.DefaultGridLength);
+            spawns = HexSpawn.FindTwoTeamSpawnsOnOppositeHorizontalSides(perTeam, gw, gh);
         }
         if (spawns.Count < ready.UserIds.Count)
         {
@@ -259,7 +260,7 @@ public partial class BattleRoomStore
             _matchmakingByUser.Remove(uid);
 
         var bid = Guid.NewGuid().ToString("N")[..8];
-        var room = new BattleRoom(bid, _weaponDb, _obstacleDb, _bodyPartDb, _userDb, _zoneShrinkDb, _medicineDb)
+        var room = new BattleRoom(bid, gw, gh, _weaponDb, _obstacleDb, _bodyPartDb, _userDb, _zoneShrinkDb, _medicineDb)
         {
             MatchModeWire = mode.ToWireString()
         };

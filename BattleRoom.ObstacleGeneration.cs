@@ -22,9 +22,9 @@ public partial class BattleRoom
         {
             var origin = (col: unit.Col, row: unit.Row);
             reserved.Add(origin);
-            for (int col = 0; col < HexSpawn.DefaultGridWidth; col++)
+            for (int col = 0; col < MapWidth; col++)
             {
-                for (int row = 0; row < HexSpawn.DefaultGridLength; row++)
+                for (int row = 0; row < MapHeight; row++)
                 {
                     if (HexSpawn.HexDistance(origin.col, origin.row, col, row) <= 2)
                         reserved.Add((col, row));
@@ -36,7 +36,7 @@ public partial class BattleRoom
         const float hexSize = 1f;
 
         bool TryPlace(int col, int row) =>
-            col >= 0 && row >= 0 && col < HexSpawn.DefaultGridWidth && row < HexSpawn.DefaultGridLength
+            col >= 0 && row >= 0 && col < MapWidth && row < MapHeight
             && !used.Contains((col, row));
 
         _wallYawDegrees.Clear();
@@ -47,8 +47,8 @@ public partial class BattleRoom
             attempts++;
             int length = _rng.Next(0, 2) == 0 ? 2 : 3;
             int dir = _rng.Next(0, 6);
-            int sc = _rng.Next(0, HexSpawn.DefaultGridWidth);
-            int sr = _rng.Next(0, HexSpawn.DefaultGridLength);
+            int sc = _rng.Next(0, MapWidth);
+            int sr = _rng.Next(0, MapHeight);
 
             var chain = new List<(int col, int row)>();
             int c = sc;
@@ -102,8 +102,8 @@ public partial class BattleRoom
         while (placedRocks < rockCount && attempts < 600)
         {
             attempts++;
-            int c = _rng.Next(0, HexSpawn.DefaultGridWidth);
-            int r = _rng.Next(0, HexSpawn.DefaultGridLength);
+            int c = _rng.Next(0, MapWidth);
+            int r = _rng.Next(0, MapHeight);
             if (!TryPlace(c, r))
                 continue;
             used.Add((c, r));
@@ -116,8 +116,8 @@ public partial class BattleRoom
         while (placedTrees < treeCount && attempts < 600)
         {
             attempts++;
-            int c = _rng.Next(0, HexSpawn.DefaultGridWidth);
-            int r = _rng.Next(0, HexSpawn.DefaultGridLength);
+            int c = _rng.Next(0, MapWidth);
+            int r = _rng.Next(0, MapHeight);
             if (!TryPlace(c, r))
                 continue;
             used.Add((c, r));

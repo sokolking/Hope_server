@@ -92,9 +92,9 @@ public partial class BattleRoom
             return;
         _zoneShrinkSettings = _zoneShrinkDb?.GetSettings() ?? BattleZoneShrinkRowDto.Defaults;
         _activeMinCol = 0;
-        _activeMaxCol = HexSpawn.DefaultGridWidth - 1;
+        _activeMaxCol = MapWidth - 1;
         _activeMinRow = 0;
-        _activeMaxRow = HexSpawn.DefaultGridLength - 1;
+        _activeMaxRow = MapHeight - 1;
         _activeZoneInitialized = true;
     }
 

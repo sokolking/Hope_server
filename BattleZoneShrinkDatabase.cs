@@ -7,21 +7,24 @@ namespace BattleServer;
 public sealed class BattleZoneShrinkDatabase
 {
     private readonly BattlePostgresDatabase _database;
+    private readonly BattleMapSettingsDatabase _mapSettings;
 
-    public BattleZoneShrinkDatabase(BattlePostgresDatabase database)
+    public BattleZoneShrinkDatabase(BattlePostgresDatabase database, BattleMapSettingsDatabase mapSettings)
     {
         _database = database;
+        _mapSettings = mapSettings;
     }
 
     public void UpsertSettings(BattleZoneShrinkRowDto row)
     {
+        var (gw, gh) = _mapSettings.GetMapDimensions();
         int startR = Math.Max(1, Math.Min(9999, row.ShrinkStartRound));
         int hInt = Math.Max(1, Math.Min(999, row.HorizontalShrinkInterval));
         int hAmt = Math.Max(0, Math.Min(50, row.HorizontalShrinkAmount));
         int vInt = Math.Max(1, Math.Min(999, row.VerticalShrinkInterval));
         int vAmt = Math.Max(0, Math.Min(50, row.VerticalShrinkAmount));
-        int minW = Math.Max(1, Math.Min(HexSpawn.DefaultGridWidth, row.MinWidth));
-        int minH = Math.Max(1, Math.Min(HexSpawn.DefaultGridLength, row.MinHeight));
+        int minW = Math.Max(1, Math.Min(gw, row.MinWidth));
+        int minH = Math.Max(1, Math.Min(gh, row.MinHeight));
 
         using var connection = _database.DataSource.OpenConnection();
         using var command = connection.CreateCommand();
@@ -49,6 +52,7 @@ ON CONFLICT (id) DO UPDATE SET
 
     public BattleZoneShrinkRowDto GetSettings()
     {
+        var (gw, gh) = _mapSettings.GetMapDimensions();
         try
         {
             using var connection = _database.DataSource.OpenConnection();
@@ -71,8 +75,8 @@ LIMIT 1;
                 HorizontalShrinkAmount = Math.Clamp(reader.GetInt32(2), 0, 50),
                 VerticalShrinkInterval = Math.Max(1, reader.GetInt32(3)),
                 VerticalShrinkAmount = Math.Clamp(reader.GetInt32(4), 0, 50),
-                MinWidth = Math.Clamp(reader.GetInt32(5), 1, HexSpawn.DefaultGridWidth),
-                MinHeight = Math.Clamp(reader.GetInt32(6), 1, HexSpawn.DefaultGridLength)
+                MinWidth = Math.Clamp(reader.GetInt32(5), 1, gw),
+                MinHeight = Math.Clamp(reader.GetInt32(6), 1, gh)
             };
         }
         catch

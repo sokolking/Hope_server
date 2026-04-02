@@ -14,12 +14,13 @@ public partial class BattleRoomStore
     private readonly BattleZoneShrinkDatabase _zoneShrinkDb;
     private readonly BattleBodyPartDatabase _bodyPartDb;
     private readonly BattleUserDatabase _userDb;
+    private readonly BattleMapSettingsDatabase _mapSettings;
     /// <summary>Очередь ожидающих (один игрок). Как только второй присоединился — создаём бой из двух.</summary>
     private string? _waitingBattleId;
 
     private readonly Dictionary<string, BattleRoom> _rooms = new();
 
-    public BattleRoomStore(BattleHistoryDatabase battleHistoryDb, BattleTurnDatabase battleTurnDb, BattleWeaponDatabase weaponDb, BattleMedicineDatabase medicineDb, BattleObstacleBalanceDatabase obstacleDb, BattleZoneShrinkDatabase zoneShrinkDb, BattleBodyPartDatabase bodyPartDb, BattleUserDatabase userDb)
+    public BattleRoomStore(BattleHistoryDatabase battleHistoryDb, BattleTurnDatabase battleTurnDb, BattleWeaponDatabase weaponDb, BattleMedicineDatabase medicineDb, BattleObstacleBalanceDatabase obstacleDb, BattleZoneShrinkDatabase zoneShrinkDb, BattleBodyPartDatabase bodyPartDb, BattleUserDatabase userDb, BattleMapSettingsDatabase mapSettings)
     {
         _battleHistoryDb = battleHistoryDb;
         _battleTurnDb = battleTurnDb;
@@ -29,6 +30,7 @@ public partial class BattleRoomStore
         _zoneShrinkDb = zoneShrinkDb;
         _bodyPartDb = bodyPartDb;
         _userDb = userDb;
+        _mapSettings = mapSettings;
     }
 
     /// <summary>Таймер раундов (вызывать из фона).</summary>
@@ -46,12 +48,13 @@ public partial class BattleRoomStore
     {
         lock (_lock)
         {
+            var (gw, gh) = _mapSettings.GetMapDimensions();
             if (_waitingBattleId == null)
             {
                 var bid = Guid.NewGuid().ToString("N")[..8];
                 _waitingBattleId = bid;
-                var room = new BattleRoom(bid, _weaponDb, _obstacleDb, _bodyPartDb, _userDb, _zoneShrinkDb, _medicineDb);
-                var sp1 = HexSpawn.FindTwoTeamSpawnsOnOppositeHorizontalSides(1, HexSpawn.DefaultGridWidth, HexSpawn.DefaultGridLength);
+                var room = new BattleRoom(bid, gw, gh, _weaponDb, _obstacleDb, _bodyPartDb, _userDb, _zoneShrinkDb, _medicineDb);
+                var sp1 = HexSpawn.FindTwoTeamSpawnsOnOppositeHorizontalSides(1, gw, gh);
                 if (sp1.Count < 1)
                     throw new InvalidOperationException("PVP 1v1 spawn failed");
                 int p1c = sp1[0].col;
@@ -64,7 +67,7 @@ public partial class BattleRoomStore
             }
 
             var existingRoom = _rooms[_waitingBattleId];
-            var sp = HexSpawn.FindTwoTeamSpawnsOnOppositeHorizontalSides(1, HexSpawn.DefaultGridWidth, HexSpawn.DefaultGridLength);
+            var sp = HexSpawn.FindTwoTeamSpawnsOnOppositeHorizontalSides(1, gw, gh);
             if (sp.Count < 2)
                 throw new InvalidOperationException("PVP 1v1 spawn failed");
             existingRoom.SetPlayerSpawnPosition("P1", sp[0].col, sp[0].row);
@@ -86,7 +89,8 @@ public partial class BattleRoomStore
             if (!_rooms.TryGetValue(battleId, out var room) || room.Players.Count != 1)
                 throw new InvalidOperationException("No waiting room for this battleId");
 
-            var spJv = HexSpawn.FindTwoTeamSpawnsOnOppositeHorizontalSides(1, HexSpawn.DefaultGridWidth, HexSpawn.DefaultGridLength);
+            var (gw, gh) = (room.MapWidth, room.MapHeight);
+            var spJv = HexSpawn.FindTwoTeamSpawnsOnOppositeHorizontalSides(1, gw, gh);
             if (spJv.Count < 2)
                 throw new InvalidOperationException("PVP 1v1 spawn failed");
             room.SetPlayerSpawnPosition("P1", spJv[0].col, spJv[0].row);
@@ -115,14 +119,15 @@ public partial class BattleRoomStore
             // Одиночный бой: не используем очередь, сразу создаём комнату и запускаем первый раунд.
             if (solo)
             {
+                var (gw, gh) = _mapSettings.GetMapDimensions();
                 var soloBattleId = Guid.NewGuid().ToString("N")[..8];
-                var soloRoom = new BattleRoom(soloBattleId, _weaponDb, _obstacleDb, _bodyPartDb, _userDb, _zoneShrinkDb, _medicineDb)
+                var soloRoom = new BattleRoom(soloBattleId, gw, gh, _weaponDb, _obstacleDb, _bodyPartDb, _userDb, _zoneShrinkDb, _medicineDb)
                 {
                     IsSolo = true,
                     MatchModeWire = "solo"
                 };
-                int soloCol = Math.Clamp(startCol, 0, HexSpawn.DefaultGridWidth - 1);
-                int soloRow = Math.Clamp(startRow, 0, HexSpawn.DefaultGridLength - 1);
+                int soloCol = Math.Clamp(startCol, 0, gw - 1);
+                int soloRow = Math.Clamp(startRow, 0, gh - 1);
                 soloRoom.AddPlayer("P1", soloCol, soloRow);
                 soloRoom.SetPlayerDisplayInfo("P1", displayName, characterLevel);
                 if (haveBattleUserId)
@@ -149,7 +154,8 @@ public partial class BattleRoomStore
             if (_waitingBattleId != null && _rooms.TryGetValue(_waitingBattleId, out var waitingRoom))
             {
                 var battleId = _waitingBattleId;
-                var spPair = HexSpawn.FindTwoTeamSpawnsOnOppositeHorizontalSides(1, HexSpawn.DefaultGridWidth, HexSpawn.DefaultGridLength);
+                var (gw2, gh2) = (waitingRoom.MapWidth, waitingRoom.MapHeight);
+                var spPair = HexSpawn.FindTwoTeamSpawnsOnOppositeHorizontalSides(1, gw2, gh2);
                 if (spPair.Count < 2)
                     throw new InvalidOperationException("PVP 1v1 spawn failed");
                 waitingRoom.SetPlayerSpawnPosition("P1", spPair[0].col, spPair[0].row);
@@ -172,8 +178,9 @@ public partial class BattleRoomStore
             }
 
             var bid = Guid.NewGuid().ToString("N")[..8];
-            var r = new BattleRoom(bid, _weaponDb, _obstacleDb, _bodyPartDb, _userDb, _zoneShrinkDb, _medicineDb);
-            var spWait = HexSpawn.FindTwoTeamSpawnsOnOppositeHorizontalSides(1, HexSpawn.DefaultGridWidth, HexSpawn.DefaultGridLength);
+            var (gw3, gh3) = _mapSettings.GetMapDimensions();
+            var r = new BattleRoom(bid, gw3, gh3, _weaponDb, _obstacleDb, _bodyPartDb, _userDb, _zoneShrinkDb, _medicineDb);
+            var spWait = HexSpawn.FindTwoTeamSpawnsOnOppositeHorizontalSides(1, gw3, gh3);
             if (spWait.Count < 1)
                 throw new InvalidOperationException("PVP 1v1 spawn failed");
             int pc = spWait[0].col;

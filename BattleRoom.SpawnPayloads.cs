@@ -181,6 +181,8 @@ public partial class BattleRoom
             RoundDuration = RoundDuration,
             RoundDeadlineUtcMs = RoundDeadlineUtcMs,
             RoundIndex = RoundIndex,
+            MapWidth = MapWidth,
+            MapHeight = MapHeight,
             SpawnPlayerIds = sid,
             SpawnCols = sc,
             SpawnRows = sr,

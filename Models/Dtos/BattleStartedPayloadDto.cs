@@ -12,6 +12,10 @@ public class BattleStartedPayloadDto
     public long RoundDeadlineUtcMs { get; set; }
     /// <summary>Current server round index (for resume after re-login).</summary>
     public int RoundIndex { get; set; }
+    /// <summary>Ширина поля (колонки); клиент строит HexGrid до спавна.</summary>
+    public int MapWidth { get; set; }
+    /// <summary>Высота поля (строки).</summary>
+    public int MapHeight { get; set; }
     /// <summary>Дублирование спавна для Unity JsonUtility (массив объектов в JSON часто не парсится).</summary>
     public string[]? SpawnPlayerIds { get; set; }
     public int[]? SpawnCols { get; set; }
