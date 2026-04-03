@@ -12,6 +12,8 @@ public static class BattleWsProtocol
     public const string TypeLeave = "leave";
     public const string TypeLeaveAck = "leaveAck";
     public const string TypeRoundResolved = "roundResolved";
+    public const string TypePlanningArrow = "planningArrow";
+    public const string TypePlanningMark = "planningMark";
 
     public static async Task SendJsonAsync(System.Net.WebSockets.WebSocket ws, object payload, JsonSerializerOptions opt, CancellationToken ct = default)
     {

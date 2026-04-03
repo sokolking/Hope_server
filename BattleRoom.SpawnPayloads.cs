@@ -19,8 +19,9 @@ public partial class BattleRoom
             var cs = CombatStatsForPlayerOrZero(playerId);
             if (PlayerToUnitId.TryGetValue(playerId, out var unitId) && Units.TryGetValue(unitId, out var unit))
             {
+                // Use combat unitId (matches TurnResult.results[].unitId), not participant slot P1/P2 — avoids client duplicate remotes.
                 items.Add((
-                    playerId,
+                    unit.UnitId,
                     unit.Col,
                     unit.Row,
                     unit.CurrentAp,
@@ -78,7 +79,7 @@ public partial class BattleRoom
                     maxAp = prof.Item2;
                 }
 
-                items.Add((playerId, Players[playerId].col, Players[playerId].row, maxAp, maxAp, maxHp, maxHp, BattlePostures.Walk, wid, wcat, wdm, wd, wr, wac, wmag, wtn, wth, wsn, dn, lv, ComputePvpTeamIdForPlayer(playerId), cs.s, cs.ag, cs.i, cs.e, cs.acc, cs.intl));
+                items.Add((GetPlayerUnitId(playerId), Players[playerId].col, Players[playerId].row, maxAp, maxAp, maxHp, maxHp, BattlePostures.Walk, wid, wcat, wdm, wd, wr, wac, wmag, wtn, wth, wsn, dn, lv, ComputePvpTeamIdForPlayer(playerId), cs.s, cs.ag, cs.i, cs.e, cs.acc, cs.intl));
             }
         }
 

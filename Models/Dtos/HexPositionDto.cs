@@ -47,4 +47,36 @@ public class HexPositionDto
         col = letter - 'A';
         return true;
     }
+
+    /// <summary>A0…Z99 или расширенный <c>x{col}:{row}</c> (как <see cref="FormatWireLabel"/>).</summary>
+    public static bool TryParseWireLabel(string? value, out int col, out int row)
+    {
+        col = 0;
+        row = 0;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        string s = value.Trim();
+        if (s.Length >= 3 && (s[0] == 'x' || s[0] == 'X'))
+        {
+            string sub = s.Substring(1);
+            int colon = sub.IndexOf(':');
+            if (colon <= 0 || colon >= sub.Length - 1)
+                return false;
+            if (!int.TryParse(sub.AsSpan(0, colon), out col))
+                return false;
+            if (!int.TryParse(sub.AsSpan(colon + 1), out row))
+                return false;
+            return true;
+        }
+
+        return TryParseWireHex(s, out col, out row);
+    }
+
+    /// <summary>Метка для JSON: компактно в A0…Z99, иначе <c>x{col}:{row}</c>.</summary>
+    public static string FormatWireLabel(int col, int row)
+    {
+        if (col is >= 0 and <= 25 && row is >= 0 and <= 99)
+            return $"{(char)('A' + col)}{row}";
+        return $"x{col}:{row}";
+    }
 }

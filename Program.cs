@@ -442,7 +442,7 @@ app.Map("/ws/battle", async (HttpContext ctx, BattleRoomStore store, BattleAuthS
     Console.WriteLine($"[BattleWS] accept begin: connId={connId}, battleId={battleId}, playerId={playerId}, userId={wsUserId}, spectator={spectatorWs}, remote={remote}, utc={DateTime.UtcNow:O}");
 
     using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
-    BattleWebSocketRegistry.Add(battleId, ws, connId);
+    BattleWebSocketRegistry.Add(battleId, ws, connId, playerId);
     UserBattleSocketRegistry.Add(wsUserId, battleId, playerId, ws, connId);
     var buf = new byte[262144];
     var recvCount = 0;
@@ -613,6 +613,115 @@ app.Map("/ws/battle", async (HttpContext ctx, BattleRoomStore store, BattleAuthS
                         // Keep session spectator list in sync after explicit leave.
                         var spectatorListJsonLeave = store.BuildSpectatorListJsonLocked();
                         await UserSessionSocketRegistry.SendTextToUserAsync(wsUserId, spectatorListJsonLeave, ctx.RequestAborted).ConfigureAwait(false);
+                    }
+                    else if (procMsgType == BattleWsProtocol.TypePlanningArrow)
+                    {
+                        if (spectatorWs)
+                            continue;
+                        var roomPa = store.GetRoom(battleId);
+                        if (roomPa == null || !roomPa.RoundInProgress)
+                            continue;
+                        PlanningArrowPayloadDto? pa;
+                        try
+                        {
+                            pa = JsonSerializer.Deserialize<PlanningArrowPayloadDto>(procText, jsonOpt);
+                        }
+                        catch
+                        {
+                            pa = null;
+                        }
+
+                        if (pa == null
+                            || !string.Equals(pa.PlayerId, playerId, StringComparison.Ordinal)
+                            || !string.Equals(pa.BattleId, battleId, StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
+
+                        if (!HexPositionDto.TryParseWireLabel(pa.FromHex, out int fromC, out int fromR)
+                            || !HexPositionDto.TryParseWireLabel(pa.ToHex, out int toC, out int toR))
+                        {
+                            continue;
+                        }
+
+                        if (fromC < 0 || fromC >= roomPa.MapWidth || fromR < 0 || fromR >= roomPa.MapHeight
+                            || toC < 0 || toC >= roomPa.MapWidth || toR < 0 || toR >= roomPa.MapHeight)
+                        {
+                            continue;
+                        }
+
+                        if (fromC == toC && fromR == toR)
+                            continue;
+
+                        string disp = roomPa.PlayerDisplayNames.TryGetValue(playerId, out var dn) && !string.IsNullOrWhiteSpace(dn)
+                            ? dn
+                            : playerId;
+                        string fromHexOut = HexPositionDto.FormatWireLabel(fromC, fromR);
+                        string toHexOut = HexPositionDto.FormatWireLabel(toC, toR);
+                        var outPayload = new
+                        {
+                            type = BattleWsProtocol.TypePlanningArrow,
+                            battleId,
+                            playerId,
+                            displayName = disp,
+                            fromHex = fromHexOut,
+                            toHex = toHexOut,
+                            createdAtUtcMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        };
+                        var outJson = JsonSerializer.Serialize(outPayload, jsonOpt);
+                        Console.WriteLine(
+                            $"[BattleWS] planningArrow recv+route: battleId={battleId}, playerId={playerId}, from={fromHexOut}, to={toHexOut}, pvpTeam={roomPa.IsPvpTeamBattle}");
+                        await BattleWebSocketRegistry.SendPlanningOverlayToAlliesAsync(battleId, ws, playerId, roomPa, outJson, "planningArrow", ctx.RequestAborted)
+                            .ConfigureAwait(false);
+                    }
+                    else if (procMsgType == BattleWsProtocol.TypePlanningMark)
+                    {
+                        if (spectatorWs)
+                            continue;
+                        var roomPm = store.GetRoom(battleId);
+                        if (roomPm == null || !roomPm.RoundInProgress)
+                            continue;
+                        PlanningMarkPayloadDto? pm;
+                        try
+                        {
+                            pm = JsonSerializer.Deserialize<PlanningMarkPayloadDto>(procText, jsonOpt);
+                        }
+                        catch
+                        {
+                            pm = null;
+                        }
+
+                        if (pm == null
+                            || !string.Equals(pm.PlayerId, playerId, StringComparison.Ordinal)
+                            || !string.Equals(pm.BattleId, battleId, StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
+
+                        if (!HexPositionDto.TryParseWireLabel(pm.Hex, out int hc, out int hr))
+                            continue;
+
+                        if (hc < 0 || hc >= roomPm.MapWidth || hr < 0 || hr >= roomPm.MapHeight)
+                            continue;
+
+                        string dispMark = roomPm.PlayerDisplayNames.TryGetValue(playerId, out var dnM) && !string.IsNullOrWhiteSpace(dnM)
+                            ? dnM
+                            : playerId;
+                        string hexOut = HexPositionDto.FormatWireLabel(hc, hr);
+                        var outMark = new
+                        {
+                            type = BattleWsProtocol.TypePlanningMark,
+                            battleId,
+                            playerId,
+                            displayName = dispMark,
+                            hex = hexOut,
+                            createdAtUtcMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        };
+                        var outMarkJson = JsonSerializer.Serialize(outMark, jsonOpt);
+                        Console.WriteLine(
+                            $"[BattleWS] planningMark recv+route: battleId={battleId}, playerId={playerId}, hex={hexOut}, pvpTeam={roomPm.IsPvpTeamBattle}");
+                        await BattleWebSocketRegistry.SendPlanningOverlayToAlliesAsync(battleId, ws, playerId, roomPm, outMarkJson, "planningMark", ctx.RequestAborted)
+                            .ConfigureAwait(false);
                     }
                     else if (!string.IsNullOrEmpty(procMsgType))
                     {
@@ -1400,6 +1509,7 @@ public class BattleStateResponse
     public int CurrentTurnPointer { get; set; }
     public BattleParticipantStatusDto[]? Participants { get; set; }
     public bool AllSubmittedThisRound { get; set; }
+    /// <summary>Parallel spawn ids: players use combat <c>unitId</c> (same as turn results), mobs use <c>mob:…</c>.</summary>
     public string[]? SpawnPlayerIds { get; set; }
     public int[]? SpawnCols { get; set; }
     public int[]? SpawnRows { get; set; }

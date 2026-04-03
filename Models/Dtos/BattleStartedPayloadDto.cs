@@ -16,7 +16,7 @@ public class BattleStartedPayloadDto
     public int MapWidth { get; set; }
     /// <summary>Высота поля (строки).</summary>
     public int MapHeight { get; set; }
-    /// <summary>Дублирование спавна для Unity JsonUtility (массив объектов в JSON часто не парсится).</summary>
+    /// <summary>Параллельно спавн-массивам: для игроков — боевой <c>unitId</c> (как в <c>TurnResult</c>, напр. decimal users.id или отрицательный гостевой слот); для мобов — <c>mob:…</c>. Не слот <c>P1</c>/<c>P2</c>.</summary>
     public string[]? SpawnPlayerIds { get; set; }
     public int[]? SpawnCols { get; set; }
     public int[]? SpawnRows { get; set; }
